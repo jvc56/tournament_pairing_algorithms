@@ -3,7 +3,7 @@ import re
 import os
 import random
 import urllib.request
-
+import networkx as nx
 class TournamentResults:
     def __init__(self, number_of_players):
         self.number_of_players = number_of_players
@@ -39,19 +39,30 @@ class TournamentPlayer:
         self.wins = self.start_wins
         self.spread = self.start_spread
 
-def sim(tps, current_round, final_round, n):
+def pair(tps, remaining_rounds):
+    G = nx.Graph()
+    edges = []
+    number_of_players = len(tps)
+    for i in range(number_of_players):
+        for j in range(i + 1, number_of_players):
+            #player_i = tps[i]
+            #player_j = tps[j]
+            weight = i + j + remaining_rounds
+            edges.append((i, j, weight))
+    G.add_weighted_edges_from(edges)
+    return sorted(nx.max_weight_matching(G))
+
+def sim(tps, start_round, final_round, n):
     results = TournamentResults(len(tps))
     for _ in range(n):
-        for i in range(final_round - current_round):
-            pairings = pair_round(tps)
+        for current_round in range(start_round,final_round):
+            pairings = pair_round_for_sim(tps, final_round-current_round)
             play_round(pairings, tps)
         results.record(tps)
         for player in tps:
             player.reset()
 
-    tournament_players.sort(key = lambda c: - (c.wins * 10000 + c.spread))
-    print("Initial Standings:")
-    print_tournament_players(tournament_players)
+    tps.sort(key = lambda c: - (c.wins * 10000 + c.spread))
     print_results(tps, results)
 
 def play_round(pairings, tps):
@@ -73,17 +84,18 @@ def play_round(pairings, tps):
         tps[pairing[0]].wins += p1win
         tps[pairing[1]].spread += -spread
         tps[pairing[1]].wins += p2win
-    tournament_players.sort(key = lambda c: - (c.wins * 10000 + c.spread))
+    tps.sort(key = lambda c: - (c.wins * 10000 + c.spread))
     
 
-def pair_round(tps):
+def pair_round_for_sim(tps, nrl):
     # For now, just implement KOTH
     # This assumes players are already sorted
     pairings = []
-    for i in range(int(len(tps)/2)):
-        pairings.append([i*2, i*2+1])
-    if len(tps) % 2 == 1:
-        pairings.append([len(tps)-1, -1])
+    for i in range(nrl):
+        pairings.append([i, i+nrl])
+    for i in range(nrl*2,len(tps),2):
+        pairings.append([i, i+1])
+
     return pairings
 
 def tournament_players_from_players_scores(players_scores):
@@ -135,6 +147,10 @@ def players_scores_from_tfile(tfile, start_round):
             index += 1
     return players_scores
 
+def tournament_players_from_tfile(filename, start_round):
+    players_scores = players_scores_from_tfile(filename, start_round)
+    return tournament_players_from_players_scores(players_scores)
+
 def print_tournament_players(tps):
     for i in range(len(tps)):
         tp = tps[i]
@@ -155,12 +171,18 @@ def print_results(tps, results):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("command", type=str, help="command to execute, either sim or pair")
     parser.add_argument("--hope", type=str, help="hopefulness factor")
     parser.add_argument("--start", type=str, help="the round at which simulations start")
     parser.add_argument("--final", type=str, help="the final round of the simulation")
     parser.add_argument("--tfile", type=str, help=".t file")
     parser.add_argument("--url", type=str, help="URL for .t file")
+    parser.add_argument("--sim", type=str, help="number of sims")
     args = parser.parse_args()
+
+    if args.command != "sim" and args.command != "pair":
+        print("command must be one of: sim, pair")
+        exit(-1)
     if not args.hope or not args.final:
         print("required: hope and final")
         exit(-1)
@@ -177,7 +199,17 @@ if __name__ == "__main__":
     if args.url:
         print("Downloading %s to %s" % (args.url, filename))
         urllib.request.urlretrieve(args.url, filename)
+
+    number_of_sims = 10
+
+    if args.sim:
+        number_of_sims = int(args.sim)
     
-    players_scores = players_scores_from_tfile(filename, int(args.start))
-    tournament_players = tournament_players_from_players_scores(players_scores)
-    sim(tournament_players, int(args.start), int(args.final), 100000)
+    tournament_players = tournament_players_from_tfile(filename, int(args.start))
+    print("Initial Standings:")
+    print_tournament_players(tournament_players)
+    if args.command == "sim":
+        sim(tournament_players, int(args.start), int(args.final), number_of_sims)
+    else:
+        pairings = pair(tournament_players, int(args.final) - int(args.start))
+        print(pairings)

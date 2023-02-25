@@ -39,18 +39,48 @@ class TournamentPlayer:
         self.wins = self.start_wins
         self.spread = self.start_spread
 
-def pair(tps, remaining_rounds):
+def pair(tps, times_played_dict, start_round, final_round):
+    tps.sort(key = lambda c: - (c.wins * 10000 + c.spread))
+    results = sim(tps, start_round, final_round, 10000)
+
+    print_results(tps, results)
+
+    lowest_ranked_winner_rank_index = -1
+    for rank_index in range(len(tps)):
+        player = tps[rank_index]
+        if results.get(player, 0) > 0:
+            lowest_ranked_winner_rank_index = rank_index
+
+    if lowest_ranked_winner_rank_index < 0:
+        print("error in pairing")
+        exit(-1)
+
     G = nx.Graph()
     edges = []
     number_of_players = len(tps)
     for i in range(number_of_players):
         for j in range(i + 1, number_of_players):
-            #player_i = tps[i]
-            #player_j = tps[j]
-            weight = i + j + remaining_rounds
+            player_i = tps[i]
+            player_j = tps[j]
+            times_played_key = create_times_played_key(player_i.index, player_j.index)
+            number_of_times_played = 0
+            if times_played_key in times_played_dict:
+                number_of_times_played = times_played_dict[times_played_key]
+
+            repeat_weight = number_of_times_played * 10000
+            # win_difference_weight = (player_i.wins - player_j.wins) ** 2
+            rank_difference_weight = (i - j) ** 2
+
+            pair_with_first_weight = 0
+            if (i == 0):
+                pair_with_first_weight = 1000
+                if (j < lowest_ranked_winner_rank_index):
+                    pair_with_first_weight = (lowest_ranked_winner_rank_index - j)
+
+            weight = repeat_weight + rank_difference_weight + pair_with_first_weight
             edges.append((i, j, weight))
     G.add_weighted_edges_from(edges)
-    return sorted(nx.max_weight_matching(G))
+    return sorted(nx.min_weight_matching(G))
 
 def sim(tps, start_round, final_round, n):
     results = TournamentResults(len(tps))
@@ -63,7 +93,7 @@ def sim(tps, start_round, final_round, n):
             player.reset()
 
     tps.sort(key = lambda c: - (c.wins * 10000 + c.spread))
-    print_results(tps, results)
+    return results
 
 def play_round(pairings, tps):
     for pairing in pairings:
@@ -86,6 +116,13 @@ def play_round(pairings, tps):
         tps[pairing[1]].wins += p2win
     tps.sort(key = lambda c: - (c.wins * 10000 + c.spread))
     
+def create_times_played_key(p1, p2):
+    a = p1
+    b = p2
+    if b < a:
+        a = p2
+        b = p1
+    return "%s:%s" % (a, b)
 
 def pair_round_for_sim(tps, nrl):
     # For now, just implement KOTH
@@ -100,19 +137,29 @@ def pair_round_for_sim(tps, nrl):
 
 def tournament_players_from_players_scores(players_scores):
     tournament_players = []
-    for pscores in players_scores:
+    times_played_dict = {}
+    for player_index in range(len(players_scores)):
+        pscores = players_scores[player_index]
         wins = 0
         spread = 0
         for round in range(len(pscores.scores)):
-            game_spread = pscores.scores[round] - players_scores[pscores.opponent_indexes[round]].scores[round]
+            opponent_index = pscores.opponent_indexes[round]
+            times_played_key = create_times_played_key(player_index, opponent_index)
+            if times_played_key in times_played_dict:
+                times_played_dict[times_played_key] += 1
+            else:
+                times_played_dict[times_played_key] = 1
+            game_spread = pscores.scores[round] - players_scores[opponent_index].scores[round]
             if game_spread > 0:
                 wins += 2
             elif game_spread == 0:
                 wins += 1
             spread += game_spread
         tournament_players.append(TournamentPlayer(pscores.name, pscores.index, wins, spread))
+    for times_played_key in times_played_dict:
+        times_played_dict[times_played_key] = times_played_dict[times_played_key] / 2
     tournament_players.sort(key = lambda c: - (c.wins * 10000 + c.spread))
-    return tournament_players
+    return tournament_players, times_played_dict
 
 def players_scores_from_tfile(tfile, start_round):
     if not os.path.isfile(tfile):
@@ -205,11 +252,14 @@ if __name__ == "__main__":
     if args.sim:
         number_of_sims = int(args.sim)
     
-    tournament_players = tournament_players_from_tfile(filename, int(args.start))
+    tournament_players, times_played = tournament_players_from_tfile(filename, int(args.start))
     print("Initial Standings:")
     print_tournament_players(tournament_players)
     if args.command == "sim":
-        sim(tournament_players, int(args.start), int(args.final), number_of_sims)
+        results = sim(tournament_players, int(args.start), int(args.final), number_of_sims)
+        print_results(tournament_players, results)
     else:
-        pairings = pair(tournament_players, int(args.final) - int(args.start))
-        print(pairings)
+        pairings = pair(tournament_players, times_played, int(args.start), int(args.final))
+        print("\n\nPairings for round %d" % (int(args.start) + 1))
+        for pairing in pairings:
+            print("%s vs. %s" % (tournament_players[pairing[0]].name, tournament_players[pairing[1]].name))

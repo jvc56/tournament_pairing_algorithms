@@ -9,7 +9,7 @@ class TournamentResults:
         self.number_of_players = number_of_players
         self.array = [0] * (number_of_players * number_of_players)
         self.count = 0
-    
+
     def record(self, tps):
         for i in range(self.number_of_players):
             player = tps[i]
@@ -41,9 +41,7 @@ class TournamentPlayer:
 
 def pair(tps, times_played_dict, start_round, final_round):
     tps.sort(key = lambda c: - (c.wins * 10000 + c.spread))
-    results = sim(tps, start_round, final_round, 10000)
-
-    print_results(tps, results)
+    results = sim(tps, start_round, final_round, 100000)
 
     lowest_ranked_winner_rank_index = -1
     for rank_index in range(len(tps)):
@@ -54,6 +52,8 @@ def pair(tps, times_played_dict, start_round, final_round):
     if lowest_ranked_winner_rank_index < 0:
         print("error in pairing")
         exit(-1)
+
+    print("lowest rankest possible winner: %d, %s" % (lowest_ranked_winner_rank_index, tps[lowest_ranked_winner_rank_index].name))
 
     G = nx.Graph()
     edges = []
@@ -67,17 +67,19 @@ def pair(tps, times_played_dict, start_round, final_round):
             if times_played_key in times_played_dict:
                 number_of_times_played = times_played_dict[times_played_key]
 
-            repeat_weight = number_of_times_played * 10000
+            repeat_weight = number_of_times_played * ( (number_of_players / 3) ** 3)
             # win_difference_weight = (player_i.wins - player_j.wins) ** 2
-            rank_difference_weight = (i - j) ** 2
+            # must be j - i since j >= i
+            rank_difference_weight = (j - i) ** 3
 
             pair_with_first_weight = 0
             if (i == 0):
-                pair_with_first_weight = 1000
-                if (j < lowest_ranked_winner_rank_index):
-                    pair_with_first_weight = (lowest_ranked_winner_rank_index - j)
+                pair_with_first_weight = 1000000
+                if (j <= lowest_ranked_winner_rank_index):
+                    pair_with_first_weight = ((lowest_ranked_winner_rank_index - j) ** 3) * 2
 
             weight = repeat_weight + rank_difference_weight + pair_with_first_weight
+            print("weight for %s vs %s is %d = %d + %d + %d" % (player_i.name, player_j.name, weight, repeat_weight, rank_difference_weight, pair_with_first_weight))
             edges.append((i, j, weight))
     G.add_weighted_edges_from(edges)
     return sorted(nx.min_weight_matching(G))
@@ -101,7 +103,7 @@ def play_round(pairings, tps):
             # Player gets a bye
             tps[pairing[0]].spread += 50
             tps[pairing[0]].wins += 2
-        spread = 100 - random.randint(0, 200)
+        spread = 200 - random.randint(0, 401)
         p1win = 1
         p2win = 1
         if spread > 0:
@@ -247,19 +249,23 @@ if __name__ == "__main__":
         print("Downloading %s to %s" % (args.url, filename))
         urllib.request.urlretrieve(args.url, filename)
 
-    number_of_sims = 10
+    number_of_sims = 100000
 
     if args.sim:
         number_of_sims = int(args.sim)
     
-    tournament_players, times_played = tournament_players_from_tfile(filename, int(args.start))
+    tournament_players, times_played_dict = tournament_players_from_tfile(filename, int(args.start))
     print("Initial Standings:")
     print_tournament_players(tournament_players)
     if args.command == "sim":
         results = sim(tournament_players, int(args.start), int(args.final), number_of_sims)
         print_results(tournament_players, results)
     else:
-        pairings = pair(tournament_players, times_played, int(args.start), int(args.final))
+        pairings = pair(tournament_players, times_played_dict, int(args.start), int(args.final))
         print("\n\nPairings for round %d" % (int(args.start) + 1))
         for pairing in pairings:
-            print("%s vs. %s" % (tournament_players[pairing[0]].name, tournament_players[pairing[1]].name))
+            times_played_key = create_times_played_key(tournament_players[pairing[0]].index, tournament_players[pairing[1]].index)
+            times_played = 0
+            if times_played_key in times_played_dict:
+                times_played = times_played_dict[times_played_key]
+            print("%s vs. %s (%d)" % (tournament_players[pairing[0]].name, tournament_players[pairing[1]].name, times_played))

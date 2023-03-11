@@ -4,6 +4,8 @@ import os
 import random
 import urllib.request
 import networkx as nx
+
+hopefulness = [0, 0, 0.1, 0.05, 0.01, 0.0025]
 class TournamentResults:
     def __init__(self, number_of_players):
         self.number_of_players = number_of_players
@@ -39,25 +41,34 @@ class TournamentPlayer:
         self.wins = self.start_wins
         self.spread = self.start_spread
 
-def pair(tps, times_played_dict, start_round, final_round):
+def pair(tps, times_played_dict, start_round, final_round, lowest_ranked_payout):
     tps.sort(key = lambda c: - (c.wins * 10000 + c.spread))
     results = sim(tps, start_round, final_round, 100000)
 
-    lowest_ranked_winner_rank_index = -1
-    for rank_index in range(len(tps)):
-        player = tps[rank_index]
-        if results.get(player, 0) > 0:
-            lowest_ranked_winner_rank_index = rank_index
+    print_results(tps, results)
+    tps.sort(key = lambda c: - (c.wins * 10000 + c.spread))
 
-    if lowest_ranked_winner_rank_index < 0:
-        print("error in pairing")
-        exit(-1)
+    number_of_rounds_remaining = final_round - start_round
 
-    print("lowest rankest possible winner: %d, %s" % (lowest_ranked_winner_rank_index, tps[lowest_ranked_winner_rank_index].name))
+    adjusted_hopefulness = 0
 
-    G = nx.Graph()
-    edges = []
+    if number_of_rounds_remaining < len(hopefulness):
+        adjusted_hopefulness = hopefulness[number_of_rounds_remaining]
+
+    print("adjusted hopefulness for round %d: %0.6f" % (start_round, adjusted_hopefulness))
+
     number_of_players = len(tps)
+    lowest_ranked_placers = [0] * (number_of_players * number_of_players)
+    for i in range(number_of_players):
+        for rank_index in range(len(tps)):
+            player = tps[rank_index]
+            if (results.get(player, i) / number_of_sims) > adjusted_hopefulness:
+                lowest_ranked_placers[i] = rank_index
+
+    for i in range(number_of_players):
+        print("lowest rankest possible winner: %d, %d, %s" % (i+1, lowest_ranked_placers[i], tps[lowest_ranked_placers[i]].name))
+
+    edges = []
     for i in range(number_of_players):
         for j in range(i + 1, number_of_players):
             player_i = tps[i]
@@ -67,20 +78,20 @@ def pair(tps, times_played_dict, start_round, final_round):
             if times_played_key in times_played_dict:
                 number_of_times_played = times_played_dict[times_played_key]
 
-            repeat_weight = number_of_times_played * ( (number_of_players / 3) ** 3)
-            # win_difference_weight = (player_i.wins - player_j.wins) ** 2
-            # must be j - i since j >= i
+            repeat_weight = (number_of_times_played * 2) * ( (number_of_players / 3) ** 3)
+
             rank_difference_weight = (j - i) ** 3
 
-            pair_with_first_weight = 0
-            if (i == 0):
-                pair_with_first_weight = 1000000
-                if (j <= lowest_ranked_winner_rank_index):
-                    pair_with_first_weight = ((lowest_ranked_winner_rank_index - j) ** 3) * 2
+            pair_with_placer = 0
+            if i <= lowest_ranked_payout:
+                pair_with_placer = 1000000
+                if (j <= lowest_ranked_placers[i]):
+                    pair_with_placer = ((lowest_ranked_placers[i] - j) ** 3) * 2
 
-            weight = repeat_weight + rank_difference_weight + pair_with_first_weight
-            print("weight for %s vs %s is %d = %d + %d + %d" % (player_i.name, player_j.name, weight, repeat_weight, rank_difference_weight, pair_with_first_weight))
+            weight = repeat_weight + rank_difference_weight + pair_with_placer
+            print("weight for %s vs %s is %d = %d + %d + %d" % (player_i.name, player_j.name, weight, repeat_weight, rank_difference_weight, pair_with_placer))
             edges.append((i, j, weight))
+    G = nx.Graph()
     G.add_weighted_edges_from(edges)
     return sorted(nx.min_weight_matching(G))
 
@@ -221,7 +232,7 @@ def print_results(tps, results):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("command", type=str, help="command to execute, either sim or pair")
-    parser.add_argument("--hope", type=str, help="hopefulness factor")
+    parser.add_argument("--payout", type=str, help="lowest ranked payout")
     parser.add_argument("--start", type=str, help="the round at which simulations start")
     parser.add_argument("--final", type=str, help="the final round of the simulation")
     parser.add_argument("--tfile", type=str, help=".t file")
@@ -232,8 +243,8 @@ if __name__ == "__main__":
     if args.command != "sim" and args.command != "pair":
         print("command must be one of: sim, pair")
         exit(-1)
-    if not args.hope or not args.final:
-        print("required: hope and final")
+    if not args.final:
+        print("required: final")
         exit(-1)
     if (not args.tfile and not args.url) or (args.tfile and args.url):
         print("required: exactly one of: tfile, url")
@@ -253,6 +264,11 @@ if __name__ == "__main__":
 
     if args.sim:
         number_of_sims = int(args.sim)
+
+    lowest_ranked_payout = 0
+
+    if args.payout:
+        lowest_ranked_payout = int(args.payout)
     
     tournament_players, times_played_dict = tournament_players_from_tfile(filename, int(args.start))
     print("Initial Standings:")
@@ -261,7 +277,7 @@ if __name__ == "__main__":
         results = sim(tournament_players, int(args.start), int(args.final), number_of_sims)
         print_results(tournament_players, results)
     else:
-        pairings = pair(tournament_players, times_played_dict, int(args.start), int(args.final))
+        pairings = pair(tournament_players, times_played_dict, int(args.start), int(args.final), lowest_ranked_payout)
         print("\n\nPairings for round %d" % (int(args.start) + 1))
         for pairing in pairings:
             times_played_key = create_times_played_key(tournament_players[pairing[0]].index, tournament_players[pairing[1]].index)

@@ -6,6 +6,8 @@ import urllib.request
 import networkx as nx
 
 hopefulness = [0, 0, 0.1, 0.05, 0.01, 0.0025]
+always_wins_number_of_sims = 10000
+control_loss_threshold = 0.15
 class TournamentResults:
     def __init__(self, number_of_players):
         self.number_of_players = number_of_players
@@ -45,9 +47,21 @@ def pair(tps, times_played_dict, start_round, final_round, lowest_ranked_payout)
     tps.sort(key = lambda c: - (c.wins * 10000 + c.spread))
     factor_pair_results = sim_factor_pair(tps, start_round, final_round, 100000)
 
-    pair_player_with_first_wins = sim_pair_player_with_winner(tps, start_round, final_round, 10000)
+    always_wins_pair_player_with_first, always_wins_factor_pair = sim_player_always_wins(tps, start_round, final_round, always_wins_number_of_sims)
 
-    print("player always plays first and wins:", pair_player_with_first_wins)
+    lowest_ranked_always_wins = 0
+    for i in range(1, len(tps)):
+        if always_wins_pair_player_with_first[i-1] == always_wins_number_of_sims:
+            lowest_ranked_always_wins = i
+        else:
+            break
+
+    control_loss = (always_wins_number_of_sims - always_wins_factor_pair[lowest_ranked_always_wins - 1]) / always_wins_number_of_sims
+
+    print("control loss for %s: %0.4f" % (tps[lowest_ranked_always_wins].name, control_loss))
+
+    print("player always wins and plays player in first: ", always_wins_pair_player_with_first)
+    print("player always wins factor pair:               ", always_wins_factor_pair)
     print_results(tps, factor_pair_results)
     tps.sort(key = lambda c: - (c.wins * 10000 + c.spread))
 
@@ -81,7 +95,7 @@ def pair(tps, times_played_dict, start_round, final_round, lowest_ranked_payout)
             if times_played_key in times_played_dict:
                 number_of_times_played = times_played_dict[times_played_key]
 
-            repeat_weight = (number_of_times_played * 2) * ( (number_of_players / 3) ** 3)
+            repeat_weight = int ((number_of_times_played * 2) * ( (number_of_players / 3) ** 3))
 
             rank_difference_weight = (j - i) ** 3
 
@@ -91,8 +105,14 @@ def pair(tps, times_played_dict, start_round, final_round, lowest_ranked_payout)
                 if (j <= lowest_ranked_placers[i]):
                     pair_with_placer = ((lowest_ranked_placers[i] - j) ** 3) * 2
 
-            weight = repeat_weight + rank_difference_weight + pair_with_placer
-            print("weight for %s vs %s is %d = %d + %d + %d" % (player_i.name, player_j.name, weight, repeat_weight, rank_difference_weight, pair_with_placer))
+            control_weight = 0
+            if i == 0:
+                control_weight = 1000000
+                if j <= lowest_ranked_always_wins or control_loss < control_loss_threshold:
+                    control_weight = 0
+
+            weight = repeat_weight + rank_difference_weight + pair_with_placer + control_weight
+            print("weight for %s vs %s (%d) is %d = %d + %d + %d + %d" % (player_i.name, player_j.name, number_of_times_played, weight, repeat_weight, rank_difference_weight, pair_with_placer, control_weight))
             edges.append((i, j, weight))
     G = nx.Graph()
     G.add_weighted_edges_from(edges)
@@ -101,14 +121,8 @@ def pair(tps, times_played_dict, start_round, final_round, lowest_ranked_payout)
 def sim_factor_pair(tps, start_round, final_round, n):
     results = TournamentResults(len(tps))
     for i in range(n):
-        if (i < 10):
-            print("\n\nNEW ITERATION\n\n")
         for current_round in range(start_round,final_round):
             pairings = factor_pair(tps, final_round-current_round)
-            if i < 10:
-                print("\n\n\nPairings for round %d" % (current_round))
-                for j in range(len(pairings)):
-                    print("%s vs. %s" % (tps[pairings[j][0]].name, tps[pairings[j][1]].name))
             play_round(pairings, tps, -1)
 
         results.record(tps)
@@ -118,35 +132,59 @@ def sim_factor_pair(tps, start_round, final_round, n):
 
     return results
 
-def sim_pair_player_with_winner(tps, start_round, final_round, n):
-    tournament_wins = []
+def sim_player_always_wins(tps, start_round, final_round, n):
+    pair_with_first_tournament_wins = []
+    factor_pair_tournament_wins = []
     player_in_first_wins = tps[0].wins
+
     for player_in_nth in range(1, len(tps)):
         # This player cannot win
-        if (player_in_first_wins - tps[player_in_nth].wins) / 2 > (final_round - start_round) + 1:
-            print("%s cannot win: %d - %d > (%d - %d) + 1" % (tps[player_in_nth].name, player_in_first_wins, tps[player_in_nth].wins, final_round, start_round))
+        if (player_in_first_wins - tps[player_in_nth].wins) / 2 > (final_round - start_round):
             break
-        twins = 0
+        pwf_wins = 0
+        fp_wins = 0
         player_in_nth_index = tps[player_in_nth].index
         for i in range(n):
-            if (i < 10):
-                print("\n\nNEW ITERATION FOR PAIR WITH FIRST\n\n")
             for current_round in range(start_round,final_round):
-                pairings = factor_pair_minus_player(tps, final_round-current_round, player_in_nth_index)
-                if i < 10:
-                    print("\n\n\nPairings for round %d" % (current_round))
-                    for j in range(len(pairings)):
-                        print("%s vs. %s" % (tps[pairings[j][0]].name, tps[pairings[j][1]].name))
-                play_round(pairings, tps, player_in_nth)
+                player_index_to_rank = {}
+                for i in range(len(tps)):
+                    player_index_to_rank[tps[i].index] = i
+                pairings = factor_pair_minus_player(tps, final_round-current_round, player_in_nth_index, player_index_to_rank)
+                play_round(pairings, tps, player_index_to_rank[player_in_nth_index])
+
                 if tps[0].index == player_in_nth_index:
-                    twins += 1
+                    pwf_wins += 1
                     break
             for player in tps:
                 player.reset()
             tps.sort(key = lambda c: - (c.wins * 10000 + c.spread))
-        tournament_wins.append(twins / n)
 
-    return tournament_wins
+            for current_round in range(start_round,final_round):
+                player_index_to_rank = {}
+                for i in range(len(tps)):
+                    player_index_to_rank[tps[i].index] = i
+                pairings = factor_pair(tps, final_round-current_round)
+                if player_in_nth == 2 and i < 10:
+                    print("\n\nFor round %d\n\n" % (current_round))
+                    for pairing in pairings:
+                        print("%s vs. %s" % (tournament_players[pairing[0]].name, tournament_players[pairing[1]].name))
+                play_round(pairings, tps, player_index_to_rank[player_in_nth_index])
+                if player_in_nth == 2 and i < 10:
+                    tps.sort(key = lambda c: - (c.wins * 10000 + c.spread))
+                    print("\n\n")
+                    print_tournament_players(tps)
+
+                if tps[0].index == player_in_nth_index:
+                    fp_wins += 1
+                    break
+            for player in tps:
+                player.reset()
+
+            tps.sort(key = lambda c: - (c.wins * 10000 + c.spread))
+        pair_with_first_tournament_wins.append(pwf_wins)
+        factor_pair_tournament_wins.append(fp_wins)
+
+    return pair_with_first_tournament_wins, factor_pair_tournament_wins
 
 def play_round(pairings, tps, forced_win_player):
     for pairing in pairings:
@@ -194,12 +232,9 @@ def factor_pair(tps, nrl):
 
     return pairings
 
-def factor_pair_minus_player(tps, nrl, player_index):
+def factor_pair_minus_player(tps, nrl, player_index, player_index_to_rank):
     # For now, just implement KOTH
     # This assumes players are already sorted
-    player_index_to_rank = {}
-    for i in range(len(tps)):
-        player_index_to_rank[tps[i].index] = i
 
     # Pop in descending order to ensure player_rank_index
     # removes the correct player
@@ -308,7 +343,6 @@ def print_results(tps, results):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", type=str, help="command to execute, either sim or pair")
     parser.add_argument("--payout", type=str, help="lowest ranked payout")
     parser.add_argument("--start", type=str, help="the round at which simulations start")
     parser.add_argument("--final", type=str, help="the final round of the simulation")
@@ -317,9 +351,6 @@ if __name__ == "__main__":
     parser.add_argument("--sim", type=str, help="number of sims")
     args = parser.parse_args()
 
-    if args.command != "sim" and args.command != "pair":
-        print("command must be one of: sim, pair")
-        exit(-1)
     if not args.final:
         print("required: final")
         exit(-1)
@@ -350,15 +381,12 @@ if __name__ == "__main__":
     tournament_players, times_played_dict = tournament_players_from_tfile(filename, int(args.start))
     print("Initial Standings:")
     print_tournament_players(tournament_players)
-    if args.command == "sim":
-        results = sim(tournament_players, int(args.start), int(args.final), number_of_sims)
-        print_results(tournament_players, results)
-    else:
-        pairings = pair(tournament_players, times_played_dict, int(args.start), int(args.final), lowest_ranked_payout)
-        print("\n\nPairings for round %d" % (int(args.start) + 1))
-        for pairing in pairings:
-            times_played_key = create_times_played_key(tournament_players[pairing[0]].index, tournament_players[pairing[1]].index)
-            times_played = 0
-            if times_played_key in times_played_dict:
-                times_played = times_played_dict[times_played_key]
-            print("%s vs. %s (%d)" % (tournament_players[pairing[0]].name, tournament_players[pairing[1]].name, times_played))
+
+    pairings = pair(tournament_players, times_played_dict, int(args.start), int(args.final), lowest_ranked_payout)
+    print("\n\nPairings for round %d" % (int(args.start) + 1))
+    for pairing in pairings:
+        times_played_key = create_times_played_key(tournament_players[pairing[0]].index, tournament_players[pairing[1]].index)
+        times_played = 0
+        if times_played_key in times_played_dict:
+            times_played = times_played_dict[times_played_key]
+        print("%s vs. %s (%d)" % (tournament_players[pairing[0]].name, tournament_players[pairing[1]].name, times_played))

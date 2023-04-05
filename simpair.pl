@@ -6,7 +6,7 @@ use Data::Dumper;
 use File::Basename;
 use Graph::Matching qw(max_weight_matching);
 
-use constant PROHIBITIVE_WEIGHT         => 1000000;
+use constant PROHIBITIVE_WEIGHT => 1000000;
 
 # Subroutintes for tournament results
 
@@ -96,7 +96,8 @@ sub sort_tournament_players_by_record {
 
 sub sort_tournament_players_by_index {
     my $tournament_players = shift;
-    @{$tournament_players} = sort { $a->{index} <=> $b->{index}} @{$tournament_players};
+    @{$tournament_players} =
+      sort { $a->{index} <=> $b->{index} } @{$tournament_players};
 }
 
 sub pair {
@@ -108,7 +109,10 @@ sub pair {
 
     log_info(
         $config,
-        sprintf("Standings after round %d\n\n%s\n", $start_round, tournament_players_string($tournament_players))
+        sprintf(
+            "Standings after round %d\n\n%s\n",
+            $start_round, tournament_players_string($tournament_players)
+        )
     );
 
     my $factor_pair_results =
@@ -148,26 +152,30 @@ sub pair {
         $config,
         sprintf(
             "Tournaments won while repeatedly winning against first:  %s\n",
-            join( ",", map { sprintf("%6s", $_) } @$always_wins_pair_player_with_first )
+            join( ",",
+                map { sprintf( "%6s", $_ ) }
+                  @$always_wins_pair_player_with_first )
         )
     );
     log_info(
         $config,
         sprintf(
             "Tournaments won while repeatedly winning in factor pair: %s\n\n",
-            join( ",", map { sprintf("%6s", $_) } @$always_wins_factor_pair )
+            join( ",", map { sprintf( "%6s", $_ ) } @$always_wins_factor_pair )
         )
     );
 
-    log_info( $config, results_string( $tournament_players, $factor_pair_results ) );
+    log_info( $config,
+        results_string( $tournament_players, $factor_pair_results ) );
 
     sort_tournament_players_by_record($tournament_players);
 
     my $number_of_rounds_remaining = $final_round - $start_round;
 
     my $adjusted_hopefulness = 0;
-    if ( $number_of_rounds_remaining < scalar(@{$config->{hopefulness}}) ) {
-        $adjusted_hopefulness = $config->{hopefulness}->[$number_of_rounds_remaining];
+    if ( $number_of_rounds_remaining < scalar( @{ $config->{hopefulness} } ) ) {
+        $adjusted_hopefulness =
+          $config->{hopefulness}->[$number_of_rounds_remaining];
     }
 
     log_info(
@@ -254,15 +262,11 @@ sub pair {
             log_info(
                 $config,
                 sprintf(
-                    "Weight for pairing %20s vs %20s (%3d) = %7d = %7d + %7d + %7d + %7d\n",
-                    $player_i->{name},
-                    $player_j->{name},
-                    $number_of_times_played,
-                    $weight,
-                    $repeat_weight,
-                    $rank_difference_weight,
-                    $pair_with_placer,
-                    $control_weight
+"Weight for pairing %20s vs %20s (%3d) = %7d = %7d + %7d + %7d + %7d\n",
+                    $player_i->{name},       $player_j->{name},
+                    $number_of_times_played, $weight,
+                    $repeat_weight,          $rank_difference_weight,
+                    $pair_with_placer,       $control_weight
                 )
             );
             push @edges, [ $i, $j, $weight ];
@@ -270,12 +274,14 @@ sub pair {
     }
 
     my $pairings = min_weight_matching( \@edges, $max_weight );
-    log_info($config, pairings_string($tournament_players, $pairings, $times_played_hash));
+    log_info( $config,
+        pairings_string( $tournament_players, $pairings, $times_played_hash ) );
     return $pairings;
 }
 
 sub sim_factor_pair {
-    my ( $tournament_players, $start_round, $final_round, $number_of_sims ) = @_;
+    my ( $tournament_players, $start_round, $final_round, $number_of_sims ) =
+      @_;
     my $results = new_tournament_results( scalar(@$tournament_players) );
     foreach my $i ( 1 .. $number_of_sims ) {
         foreach my $current_round ( $start_round .. $final_round - 1 ) {
@@ -294,19 +300,19 @@ sub sim_factor_pair {
 }
 
 sub sim_player_always_wins {
-    my ( $tournament_players, $start_round, $final_round, $number_of_sims ) = @_;
+    my ( $tournament_players, $start_round, $final_round, $number_of_sims ) =
+      @_;
 
     my @pair_with_first_tournament_wins;
     my @factor_pair_tournament_wins;
     my $player_in_first_wins = $tournament_players->[0]->{wins};
 
     for my $player_in_nth ( 1 .. scalar(@$tournament_players) - 1 ) {
-        my $win_diff = (
-                $player_in_first_wins -
-                $tournament_players->[$player_in_nth]->{wins}
-            ) / 2;
+        my $win_diff = ( $player_in_first_wins -
+              $tournament_players->[$player_in_nth]->{wins} ) / 2;
+
         # This player cannot win
-        if ($win_diff > ( $final_round - $start_round )) {
+        if ( $win_diff > ( $final_round - $start_round ) ) {
             last;
         }
 
@@ -337,7 +343,7 @@ sub sim_player_always_wins {
             for my $player (@$tournament_players) {
                 reset_tournament_player($player);
             }
-            
+
             sort_tournament_players_by_record($tournament_players);
 
             for my $current_round ( $start_round .. $final_round - 1 ) {
@@ -375,6 +381,7 @@ sub play_round {
 
     foreach my $pairing (@$pairings) {
         if ( $pairing->[1] == -1 ) {
+
             # Player gets a bye
             $tournament_players->[ $pairing->[0] ]->{spread} += 50;
             $tournament_players->[ $pairing->[0] ]->{wins}   += 2;
@@ -504,7 +511,7 @@ sub results_string {
 
 sub tournament_players_string {
     my $tournament_players = shift;
-    my $result = '';
+    my $result             = '';
     for ( my $i = 0 ; $i < @$tournament_players ; $i++ ) {
         my $tp = $tournament_players->[$i];
         $result .= sprintf(
@@ -518,36 +525,40 @@ sub tournament_players_string {
 }
 
 sub pairings_string {
-    my ($players, $pairings, $times_played_hash) = @_;
+    my ( $players, $pairings, $times_played_hash ) = @_;
 
-    my $result = "\n\nPairings:\n";
+    my $result     = "\n\nPairings:\n";
     my %used_pairs = ();
-    foreach my $i (0 .. $#$players) {
-        my $player = $players->[$i];
+    foreach my $i ( 0 .. $#$players ) {
+        my $player    = $players->[$i];
         my $opp_index = $pairings->{$i};
-        next if $used_pairs{"$i:$opp_index"} || $used_pairs{"$opp_index:$i"} || !defined($opp_index);
+        next
+          if $used_pairs{"$i:$opp_index"}
+          || $used_pairs{"$opp_index:$i"}
+          || !defined($opp_index);
         $used_pairs{"$i:$opp_index"} = 1;
         $used_pairs{"$opp_index:$i"} = 1;
 
         my $opponent = $players->[$opp_index];
 
         my $times_played_key =
-            create_times_played_key( $player->{index}, $opponent->{index} );
+          create_times_played_key( $player->{index}, $opponent->{index} );
         my $number_of_times_played = 0;
         if ( exists $times_played_hash->{$times_played_key} ) {
-            $number_of_times_played =
-                $times_played_hash->{$times_played_key};
+            $number_of_times_played = $times_played_hash->{$times_played_key};
         }
 
-        $result .= sprintf("%s (%d, %d, %d) vs %s (%d, %d, %d) (%d)\n",
-            $player->{name}, $i + 1, $player->{wins} / 2, $player->{spread}, 
-            $opponent->{name}, $opp_index + 1, $opponent->{wins} / 2, $opponent->{spread},
-            $number_of_times_played);
+        $result .= sprintf(
+            "%s (%d, %d, %d) vs %s (%d, %d, %d) (%d)\n",
+            $player->{name},       $i + 1,
+            $player->{wins} / 2,   $player->{spread},
+            $opponent->{name},     $opp_index + 1,
+            $opponent->{wins} / 2, $opponent->{spread},
+            $number_of_times_played
+        );
     }
 
     return $result;
 }
-
-
 
 1;

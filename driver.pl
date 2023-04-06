@@ -128,12 +128,12 @@ sub tournament_players_from_tfile {
 
 sub main {
 
-    my $payout;
-    my $start;
+    my $payout = 1;
+    my $start  = 1;
     my $final;
     my $tfile;
     my $url;
-    my $sim;
+    my $sim = 100000;
 
     GetOptions(
         "payout=s" => \$payout,
@@ -186,16 +186,18 @@ sub main {
         number_of_sims             => $number_of_sims,
         always_wins_number_of_sims => 10_000,
         control_loss_threshold     => 0.15,
+        number_of_rounds_remaining => $final - $start,
+        lowest_ranked_payout       => $lowest_ranked_payout,
+        gibson_spread_per_game     => 500,
 
         # Padded with a 0 at the beginning to account for the
         # last round always being KOTH
         hopefulness => [ 0, 0, 0.1, 0.05, 0.01, 0.0025 ]
     };
 
-    pair( $config, $tournament_players, $times_played_hash, $start, $final,
-        $lowest_ranked_payout, $number_of_sims );
+    pair( $config, $tournament_players, $times_played_hash );
 
-    printf( "\n\nLOG:\n\n%s\n", $config->{log} );
+    printf( $config->{log} );
 }
 
 main();

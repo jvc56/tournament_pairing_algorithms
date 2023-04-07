@@ -65,7 +65,7 @@ sub initialise ($$$$) {
 Use the XYZPAIR command to automatically pair a round.
 EOF
     $this->{'names'}    = [qw(xyzpair)];
-    $this->{'argtypes'} = [qw(RepeatsSince BasedOnRound Division)];
+    $this->{'argtypes'} = [qw(BasedOnRound Division)];
 
     # print "names=@$namesp argtypes=@$argtypesp\n";
 
@@ -84,10 +84,47 @@ tournament with the specified parsed arguments.
 sub Run ($$@) {
     my $this       = shift;
     my $tournament = shift;
-    my ( $repeats, $since1, $sr, $dp ) = @_;
+    my ( $sr, $dp ) = @_;
     my $sr0 = $sr - 1;
-    my $since0;
-    $since0 = $since1 - 1 if defined $since1;
+
+    # Create log directory
+    my $log_dir =
+      sprintf( "%s/xyzpair_logs/", $tournament->Config()->{root_directory} );
+
+    mkdir $log_dir;
+
+    if ( !-e $log_dir ) {
+        $tournament->TellUser( 'epfail',
+            "failed to create directory %log_dir" );
+        return 0;
+    }
+
+    my $timestamp = localtime();
+    $timestamp =~ s/[\s\:]/_/g;
+    my $division_name = $dp->Name();
+    my $sr1           = $sr0 + 1;
+    my $log_filename =
+      "$log_dir$timestamp" . "_div_$division_name" . "_round_$sr1.log";
+
+    # Create the special config for xyzpair
+    my $xyzpair_config = {
+        log_filename               => $log_filename,
+        number_of_sims             => 100_000,
+        always_wins_number_of_sims => 10_000,
+        control_loss_threshold     => 0.15,
+        number_of_rounds_remaining => $dp->MaxRound0() - $sr0,
+        lowest_ranked_payout =>
+          $tournament->Config()->LastPrizeRank( $dp->Name() ),
+        gibson_spread_per_game => 500,
+
+        # Padded with a 0 at the beginning to account for the
+        # last round always being KOTH
+        hopefulness => [ 0, 0, 0.1, 0.05, 0.01, 0.0025 ]
+    };
+
+    log_info( $xyzpair_config,
+"Started at $timestamp for $division_name round $sr1 \n\nXYZPAIR Config:\n\n"
+          . Dumper($xyzpair_config) );
 
     my %times_played = ();
 
@@ -132,29 +169,12 @@ sub Run ($$@) {
         );
     }
 
-    my $xyzpair_config = {
-        log                        => '',
-        number_of_sims             => 100_000,
-        always_wins_number_of_sims => 10_000,
-        control_loss_threshold     => 0.15,
-        number_of_rounds_remaining => $dp->MaxRound0() - $sr0,
-        lowest_ranked_payout =>
-          $tournament->Config()->LastPrizeRank( $dp->Name() ),
-        gibson_spread_per_game => 500,
-
-        # Padded with a 0 at the beginning to account for the
-        # last round always being KOTH
-        hopefulness => [ 0, 0, 0.1, 0.05, 0.01, 0.0025 ]
-    };
-
     my $pairings =
       xyzpair( $xyzpair_config, \@tournament_players, \%times_played );
 
     my $setupp = $this->SetupForPairings(
-        'division'  => $dp,
-        'source0'   => $sr0,
-        'repeats'   => $repeats,
-        'repsince0' => $since0
+        'division' => $dp,
+        'source0'  => $sr0
     ) or return 0;
 
     my $target0 = $setupp->{'target0'};
@@ -190,12 +210,19 @@ use constant PROHIBITIVE_WEIGHT => 1000000;
 
 sub log_info {
     my ( $config, $content ) = @_;
-    $config->{log} .= $content;
-}
 
-sub log_config {
-    my ($config) = @_;
-    $config->{log} .= "CONFIG\n\n" . Dumper($config);
+    my $fh;
+    my $file_opened = open( $fh, '>>', $config->{log_filename} );
+
+    if ( !$file_opened ) {
+        printf( "could not write to file %s: %s\n",
+            $config->{log_filename}, $! );
+        return;
+    }
+
+    print $fh $content;
+
+    close($fh);
 }
 
 # Create new tournament results
@@ -279,8 +306,6 @@ sub add_bye_player {
 sub xyzpair {
     my ( $config, $tournament_players, $times_played_hash ) = @_;
 
-    log_config($config);
-
     # Lowest ranked payout was given as 1-indexed
     # To keep this consistent with the rest of the 0-indexed
     # code in these functions, we convert it to 0-indexed here.
@@ -303,7 +328,7 @@ sub xyzpair {
 
     log_info(
         $config,
-        sprintf( "\n\nSTANDINGS\n\n%s\n",
+        sprintf( "\n\nStandings\n\n%s\n",
             tournament_players_string($tournament_players) )
     );
 
@@ -317,7 +342,7 @@ sub xyzpair {
       get_lowest_gibson_rank( $config, $tournament_players,
         $number_of_players );
 
-    log_info( $config, "\n\nGIBSONIZATION\n\n" );
+    log_info( $config, "\n\nGibsons\n\n" );
 
     if ( $lowest_gibson_rank >= 0 ) {
         log_info(
@@ -333,9 +358,6 @@ sub xyzpair {
         log_info( $config, "\nNo one is gibsonized\n" );
     }
 
-    log_info( $config,
-        results_string( $config, $tournament_players, $factor_pair_results ) );
-
     sort_tournament_players_by_record($tournament_players);
 
     my $lowest_ranked_placers =
@@ -347,6 +369,14 @@ sub xyzpair {
 
     log_info(
         $config,
+        results_string(
+            $config,              $tournament_players,
+            $factor_pair_results, $lowest_ranked_player_within_payout
+        )
+    );
+
+    log_info(
+        $config,
         sprintf(
             "\nLowest ranked player who can still cash: %d (%s)",
             $lowest_ranked_player_within_payout,
@@ -354,7 +384,15 @@ sub xyzpair {
         )
     );
 
-    log_info( $config, "\n\nPAIRING WEIGHTS\n\n" );
+    log_info(
+        $config,
+        sprintf(
+"\n\nWeights\n\n%-92s | %-3s = %7s = %7s + %7s + %7s + %7s + %7s + %7s\n",
+            "Pairing",  "Rpt",     "Total",  "Repeats", "RankDif",
+            "RankPair", "Control", "Gibson", "KOTH"
+        )
+    );
+
     my $max_weight = 0;
     my @edges      = ();
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
@@ -457,17 +495,25 @@ sub xyzpair {
             if ( $weight > $max_weight ) {
                 $max_weight = $weight;
             }
-            log_info(
-                $config,
-                sprintf(
-"Weight for pairing %20s vs %20s (%3d) = %7d = %7d + %7d + %7d + %7d + %7d + %7d\n",
-                    $player_i->{name},        $player_j->{name},
-                    $number_of_times_played,  $weight,
-                    $repeat_weight,           $rank_difference_weight,
-                    $pair_with_placer_weight, $control_loss_weight,
-                    $gibson_weight,           $koth_weight
-                )
-            );
+            if ( $i <= $lowest_ranked_player_within_payout ) {
+                log_info(
+                    $config,
+                    sprintf(
+"%s vs %s | %3d = %7d = %7d + %7d + %7d + %7d + %7d + %7d\n",
+                        player_string( $player_i, $i ),
+                        player_string( $player_j, $j ),
+                        $number_of_times_played,
+                        $weight,
+                        $repeat_weight,
+                        $rank_difference_weight,
+                        $pair_with_placer_weight,
+                        $control_loss_weight,
+                        $gibson_weight,
+                        $koth_weight
+                    )
+                );
+            }
+
             push @edges, [ $i, $j, $weight ];
         }
     }
@@ -507,11 +553,6 @@ sub get_lowest_ranked_placers {
           $config->{hopefulness}->[ $config->{number_of_rounds_remaining} ];
     }
 
-    log_info( $config,
-        "\n\nLOWEST RANKED PLACERS\n\n"
-          . sprintf( "\nAdjusted hopefulness: %0.6f\n\n",
-            $adjusted_hopefulness ) );
-
     my @lowest_ranked_placers =
       (0) x ( $number_of_players * $number_of_players );
 
@@ -544,14 +585,21 @@ sub get_lowest_ranked_placers {
         }
     }
 
-    for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
+    log_info( $config,
+        "\n\nLowest ranked placers\n\n"
+          . sprintf( "\nAdjusted hopefulness: %0.6f\n\n",
+            $adjusted_hopefulness ) );
+
+    for ( my $i = 0 ; $i < $config->{lowest_ranked_payout} ; $i++ ) {
         log_info(
             $config,
             sprintf(
-                "Lowest ranked possible winner for rank %d: %d (%s)\n",
+                "Lowest ranked possible winner for rank %d: %s\n",
                 $i + 1,
-                $lowest_ranked_placers[$i] + 1,
-                $tournament_players->[ $lowest_ranked_placers[$i] ]->{name}
+                player_string(
+                    $tournament_players->[ $lowest_ranked_placers[$i] ],
+                    $lowest_ranked_placers[$i]
+                )
             )
         );
     }
@@ -586,14 +634,16 @@ sub get_control_loss {
           $config->{always_wins_number_of_sims};
     }
 
-    log_info( $config, "\n\nCONTROL LOSS\n\n" );
+    log_info( $config, "\n\nControl loss\n\n" );
 
     log_info(
         $config,
         sprintf(
-"Lowest ranked always winning player: %d (%s) with a control loss of %f\n\n",
-            $lowest_ranked_always_wins + 1,
-            $tournament_players->[$lowest_ranked_always_wins]->{name},
+"Lowest ranked always winning player: %s with a control loss of %f\n\n",
+            player_string(
+                $tournament_players->[$lowest_ranked_always_wins],
+                $lowest_ranked_always_wins
+            ),
             $control_loss
         )
     );
@@ -601,8 +651,8 @@ sub get_control_loss {
     log_info(
         $config,
         sprintf(
-            "Always wins table out of %d sims\n\n%-20s%-20s%-20s\n",
-            $config->{always_wins_number_of_sims}, "Name",
+            "Always wins table out of %d sims\n\n%-50s%-20s%-20s\n",
+            $config->{always_wins_number_of_sims}, "Player",
             "Always wins vs 1st",                  "Always wins factor"
         )
     );
@@ -612,8 +662,8 @@ sub get_control_loss {
         log_info(
             $config,
             sprintf(
-                "%-20s%-20s%-20s\n",
-                $tournament_players->[ $i + 1 ]->{name},
+                "%-50s%-20s%-20s\n",
+                player_string( $tournament_players->[ $i + 1 ], $i + 1 ),
                 $always_wins_pair_player_with_first->[$i],
                 $always_wins_factor_pair->[$i]
             )
@@ -940,19 +990,43 @@ sub convert_matching_to_index_pairings {
 }
 
 # For logging only
+
+sub player_string {
+    my ( $player, $rank_index ) = @_;
+    my $name_and_index = sprintf( "%-6s %-22s",
+        '(#' . ( $player->{index} + 1 ) . ')',
+        $player->{name} );
+    my $wins_string = sprintf( "%0.1f", $player->{wins} / 2 );
+    my $sign        = '+';
+    if ( $player->{spread} < 0 ) {
+        $sign = '';
+    }
+    my $rank_string = $rank_index + 1;
+    if ( $rank_index < 0 ) {
+        $rank_string = '';
+    }
+    return sprintf(
+        "%-3s %s %-4s %-5s",
+        $rank_string, $name_and_index,
+        $wins_string, $sign . $player->{spread}
+    );
+}
+
 sub results_string {
-    my ( $config, $tournament_players, $results ) = @_;
+    my ( $config, $tournament_players, $results,
+        $lowest_ranked_player_within_payout )
+      = @_;
     sort_tournament_players_by_record($tournament_players);
-    my $result = "\n\nRESULTS\n\n";
-    $result .= sprintf( "%30s", ("") );
-    for ( my $i = 0 ; $i <= $config->{lowest_ranked_payout} ; $i++ ) {
+    my $result = "\n\nResults\n\n";
+    $result .= sprintf( "%46s", ("") );
+    for ( my $i = 0 ; $i <= $lowest_ranked_player_within_payout ; $i++ ) {
         $result .= sprintf( "%-7s", ( $i + 1 ) );
     }
     $result .= sprintf("\n");
-    for ( my $i = 0 ; $i <= $config->{lowest_ranked_payout} ; $i++ ) {
+    for ( my $i = 0 ; $i <= $lowest_ranked_player_within_payout ; $i++ ) {
         my $player = $tournament_players->[$i];
-        $result .= sprintf( "%-30s", ( $player->{name} ) );
-        for ( my $j = 0 ; $j <= $config->{lowest_ranked_payout} ; $j++ ) {
+        $result .= player_string( $player, $i ) . '  ';
+        for ( my $j = 0 ; $j <= $lowest_ranked_player_within_payout ; $j++ ) {
             $result .= sprintf( "%-7s",
                 ( get_tournament_result( $results, $player, $j ) ) );
         }
@@ -965,16 +1039,7 @@ sub tournament_players_string {
     my $tournament_players = shift;
     my $result             = '';
     for ( my $i = 0 ; $i < @$tournament_players ; $i++ ) {
-        my $tp = $tournament_players->[$i];
-        my $name_and_index =
-          sprintf( "%-5s %-22s", '(' . ( $tp->{index} + 1 ) . ')',
-            $tp->{name} );
-        my $wins_string = sprintf( "%0.1f", $tp->{wins} / 2 );
-        $result .= sprintf(
-            "%-3s %s %-4s %d\n",
-            ( $i + 1 ),
-            $name_and_index, $wins_string, $tp->{spread}
-        );
+        $result .= player_string( $tournament_players->[$i], $i ) . "\n";
     }
     return $result;
 }
@@ -988,7 +1053,7 @@ sub pairings_string {
     sort_tournament_players_by_index($tournament_players);
 
     my $number_of_players = scalar @{$tournament_players};
-    my $result = sprintf( "\n\nPAIRINGS: %d\n\n", $number_of_players );
+    my $result            = "\n\nPairings:\n\n";
     for (
         my $player_index = 0 ;
         $player_index < $number_of_players ;
@@ -1005,23 +1070,18 @@ sub pairings_string {
             $times_played_hash );
         if ( $opponent_index == -1 ) {
             $result .= sprintf(
-                "%s (%d, %d, %d) has a bye (%d)\n",
-                $player->{name},     $player_index + 1,
-                $player->{wins} / 2, $player->{spread},
+                "%s has a bye (%d)\n",
+                player_string( $player, -1 ),
                 $number_of_times_played
             );
         }
         else {
             my $opponent = $tournament_players->[$opponent_index];
 
-            $result .= sprintf(
-                "%s (%d, %d, %d) vs %s (%d, %d, %d) (%d)\n",
-                $player->{name},       $player_index + 1,
-                $player->{wins} / 2,   $player->{spread},
-                $opponent->{name},     $opponent_index + 1,
-                $opponent->{wins} / 2, $opponent->{spread},
-                $number_of_times_played
-            );
+            $result .= sprintf( "%s vs %s (%d)\n",
+                player_string( $player,   -1 ),
+                player_string( $opponent, -1 ),
+                $number_of_times_played );
         }
     }
     return $result;

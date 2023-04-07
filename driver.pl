@@ -110,6 +110,7 @@ sub tournament_players_from_players_scores {
             # Byes have already been converted from 0 to -1
             # when reading from the t file.
             if ( $opponent_index == -1 ) {
+
                 # Account for the bye "pairing" only
                 # occurring once since the bye is not a real player.
                 # Later, all of the values in this hash will be
@@ -212,8 +213,19 @@ sub main {
     my ( $tournament_players, $times_played_hash ) =
       tournament_players_from_tfile( $filename, $start );
 
+    my $log_dir = "./xyzpair_logs/";
+
+    mkdir $log_dir;
+
+    if ( !-e $log_dir ) {
+        die "$log_dir does not exist";
+    }
+
+    my $timestamp = localtime();
+    $timestamp =~ s/[\s\:]/_/g;
+
     my $config = {
-        log                        => '',
+        log_filename => "$log_dir$timestamp" . "_div_somediv_round_$start.log",
         number_of_sims             => $number_of_sims,
         always_wins_number_of_sims => 10_000,
         control_loss_threshold     => 0.15,
@@ -227,8 +239,6 @@ sub main {
     };
 
     xyzpair( $config, $tournament_players, $times_played_hash );
-
-    printf( $config->{log} );
 }
 
 main();

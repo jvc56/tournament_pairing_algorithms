@@ -1,10 +1,181 @@
 #!/usr/bin/perl
 
-use warnings;
+package TSH::Command::XYZPAIR;
+
 use strict;
-use Data::Dumper;
+use warnings;
+
+use TSH::PairingCommand;
+use TSH::Player;
+use TSH::Utility qw(Debug);
+use TSH::Utility qw(Debug DebugOn DebugOff);
+
+# Needed by XYZPAIR
 use File::Basename;
+use Data::Dumper;
 use Graph::Matching qw(max_weight_matching);
+
+our (@ISA) = qw(TSH::PairingCommand);
+
+=pod
+
+=head1 NAME
+
+TSH::Command::XYZPAIR - implement the C<tsh> XYZPAIR command
+
+=head1 SYNOPSIS
+
+  my $command = new TSH::Command::XYZPAIR;
+  my $argsp = $command->ArgumentTypes();
+  my $helptext = $command->Help();
+  my (@names) = $command->Names();
+  $command->Run($tournament, @parsed_arguments);
+  
+=head1 ABSTRACT
+
+TSH::Command::XYZPAIR is a subclass of TSH::Command.
+
+=cut
+
+=head1 DESCRIPTION
+
+=over 4
+
+=cut
+
+sub initialise ($$$$);
+sub new ($);
+sub Run ($$@);
+
+=item $parserp->initialise()
+
+Used internally to (re)initialise the object.
+
+=cut
+
+sub initialise ($$$$) {
+    my $this      = shift;
+    my $path      = shift;
+    my $namesp    = shift;
+    my $argtypesp = shift;
+
+    $this->{'help'} = <<'EOF';
+Use the XYZPAIR command to automatically pair a round.
+EOF
+    $this->{'names'}    = [qw(xyzpair)];
+    $this->{'argtypes'} = [qw(RepeatsSince BasedOnRound Division)];
+
+    # print "names=@$namesp argtypes=@$argtypesp\n";
+
+    return $this;
+}
+
+sub new ($) { return TSH::Utility::new(@_); }
+
+=item $command->Run($tournament, @parsed_args)
+
+Should run the command in the context of the given
+tournament with the specified parsed arguments.
+
+=cut
+
+sub Run ($$@) {
+    my $this       = shift;
+    my $tournament = shift;
+    my ( $repeats, $since1, $sr, $dp ) = @_;
+
+    my $based_on_round = $based_on_round_1_indexed - 1;
+
+    my %times_played = ();
+
+    # Iterate through the players in a division
+    my @players            = $division->Players();
+    my $number_of_players  = scalar @players;
+    my @tournament_players = ();
+    for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
+        my $player       = $players[$i];
+        my $player_index = $player->ID() - 1;
+        for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
+            my $opponent               = $players[$j];
+            my $opponent_index         = $opponent->ID() - 1;
+            my $number_of_times_played = my $repeats =
+              $player->CountRoundRepeats( $opponent, $based_on_round );
+            my $times_played_key =
+              create_times_played_key( $player_index, $opponent_index );
+            $times_played{$times_played_key} = $repeats;
+        }
+
+        # Here, we treat the bye as a player with an index of $number_of_players
+        my $times_given_bye_key =
+          create_times_played_key( $player_index, $number_of_players );
+
+        # There is no function to get the byes by round, so we just use the most
+        # recent number of byes
+        $times_played{$times_played_key} = $player->Byes();
+
+        push @tournament_players,
+          new_tournament_player(
+            $player->PrettyName(), $player->ID(),
+            $player->RoundWins($based_on_round),
+            $player->RoundSpread($based_on_round), 0
+          );
+    }
+
+    my $xyzpair_config = {
+        log                        => '',
+        number_of_sims             => $number_of_sims,
+        always_wins_number_of_sims => 10_000,
+        control_loss_threshold     => 0.15,
+        number_of_rounds_remaining => $final - $start,
+        lowest_ranked_payout       => $lowest_ranked_payout,
+        gibson_spread_per_game     => 500,
+
+        # Padded with a 0 at the beginning to account for the
+        # last round always being KOTH
+        hopefulness => [ 0, 0, 0.1, 0.05, 0.01, 0.0025 ]
+    };
+
+    my $pairings =
+      xyzpair( $xyzpair_config, $tournament_players, \%times_played );
+
+    my $setupp = $this->SetupForPairings(
+        'division'  => $dp,
+        'source0'   => $sr0,
+        'repeats'   => $repeats,
+        'repsince0' => $since0
+    ) or return 0;
+
+    my $target0 = $setupp->{'target0'};
+
+    for ( my $i = 0 ; $i < scalar @{$pairings} ; $i++ ) {
+        # Convert back to 1-indexed
+        my $player_id   = $i + 1;
+        my $opponent_id = $pairings->[$i] + 1;
+        if ($player_id < $opponent_id) {
+          next;
+        }
+        if ( $opponent_id == $number_of_players + 1) {
+            # This pairing is a bye
+            $division->Pair( $player_id, 0, $target0, 1 );
+        }
+        else {
+            $division->Pair( $player_id, $opponent_id, $target0, 1 );
+        }
+    }
+
+    $this->TidyAfterPairing($division);
+}
+
+=back
+
+=cut
+
+=head1 BUGS
+
+The number of byes each player has is based on the most recent
+round as opposed to the provided based on round.
+
+=cut
 
 use constant PROHIBITIVE_WEIGHT => 1000000;
 

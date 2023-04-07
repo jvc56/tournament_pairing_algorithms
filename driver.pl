@@ -1,5 +1,7 @@
 #!/usr/bin/perl
 
+package TSH::Command::XYZPAIR;
+
 use strict;
 use warnings;
 

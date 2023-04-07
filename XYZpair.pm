@@ -5,6 +5,8 @@ package TSH::Command::XYZPAIR;
 use strict;
 use warnings;
 
+use lib '/home/josh/TSH/lib/perl/';
+
 use TSH::PairingCommand;
 use TSH::Player;
 use TSH::Utility qw(Debug);
@@ -83,13 +85,14 @@ sub Run ($$@) {
     my $this       = shift;
     my $tournament = shift;
     my ( $repeats, $since1, $sr, $dp ) = @_;
-
-    my $based_on_round = $based_on_round_1_indexed - 1;
+    my $sr0 = $sr-1;
+    my $since0;
+    $since0 = $since1 - 1 if defined $since1;
 
     my %times_played = ();
 
     # Iterate through the players in a division
-    my @players            = $division->Players();
+    my @players            = $dp->Players();
     my $number_of_players  = scalar @players;
     my @tournament_players = ();
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
@@ -99,7 +102,7 @@ sub Run ($$@) {
             my $opponent               = $players[$j];
             my $opponent_index         = $opponent->ID() - 1;
             my $number_of_times_played = my $repeats =
-              $player->CountRoundRepeats( $opponent, $based_on_round );
+              $player->CountRoundRepeats( $opponent, $sr0 );
             my $times_played_key =
               create_times_played_key( $player_index, $opponent_index );
             $times_played{$times_played_key} = $repeats;
@@ -111,23 +114,23 @@ sub Run ($$@) {
 
         # There is no function to get the byes by round, so we just use the most
         # recent number of byes
-        $times_played{$times_played_key} = $player->Byes();
+        $times_played{$times_given_bye_key} = $player->Byes();
 
         push @tournament_players,
           new_tournament_player(
             $player->PrettyName(), $player->ID(),
-            $player->RoundWins($based_on_round),
-            $player->RoundSpread($based_on_round), 0
+            $player->RoundWins($sr0),
+            $player->RoundSpread($sr0), 0
           );
     }
 
     my $xyzpair_config = {
         log                        => '',
-        number_of_sims             => $number_of_sims,
+        number_of_sims             => 100_000,
         always_wins_number_of_sims => 10_000,
         control_loss_threshold     => 0.15,
-        number_of_rounds_remaining => $final - $start,
-        lowest_ranked_payout       => $lowest_ranked_payout,
+        number_of_rounds_remaining => $dp->MaxRound0() - $sr0,
+        lowest_ranked_payout       => $tournament->Config()->LastPrizeRank($dp->Name()) - 1,
         gibson_spread_per_game     => 500,
 
         # Padded with a 0 at the beginning to account for the
@@ -136,7 +139,7 @@ sub Run ($$@) {
     };
 
     my $pairings =
-      xyzpair( $xyzpair_config, $tournament_players, \%times_played );
+      xyzpair( $xyzpair_config, \@tournament_players, \%times_played );
 
     my $setupp = $this->SetupForPairings(
         'division'  => $dp,
@@ -156,14 +159,14 @@ sub Run ($$@) {
         }
         if ( $opponent_id == $number_of_players + 1) {
             # This pairing is a bye
-            $division->Pair( $player_id, 0, $target0, 1 );
+            $dp->Pair( $player_id, 0, $target0, 1 );
         }
         else {
-            $division->Pair( $player_id, $opponent_id, $target0, 1 );
+            $dp->Pair( $player_id, $opponent_id, $target0, 1 );
         }
     }
 
-    $this->TidyAfterPairing($division);
+    $this->TidyAfterPairing($dp);
 }
 
 =back
@@ -268,7 +271,7 @@ sub add_bye_player {
 
 # Pairing and simming
 
-sub pair {
+sub xyzpair {
     my ( $config, $tournament_players, $times_played_hash ) = @_;
 
     log_config($config);

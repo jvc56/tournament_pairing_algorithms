@@ -85,7 +85,7 @@ sub Run ($$@) {
     my $this       = shift;
     my $tournament = shift;
     my ( $repeats, $since1, $sr, $dp ) = @_;
-    my $sr0 = $sr-1;
+    my $sr0 = $sr - 1;
     my $since0;
     $since0 = $since1 - 1 if defined $since1;
 
@@ -108,20 +108,28 @@ sub Run ($$@) {
             $times_played{$times_played_key} = $repeats;
         }
 
-        # Here, we treat the bye as a player with an index of $number_of_players
-        my $times_given_bye_key =
-          create_times_played_key( $player_index, $number_of_players );
+        # For XYZPAIR we treat the bye index as -1
+        my $times_given_bye_key = create_times_played_key( $player_index, -1 );
 
-        # There is no function to get the byes by round, so we just use the most
-        # recent number of byes
-        $times_played{$times_given_bye_key} = $player->Byes();
+        # Count the byes by up to the based on round
+        # (There does not seem to be an existing Player method for this)
+        my $byes = 0;
+        for ( my $round = 0 ; $round <= $sr0 ; $round++ ) {
+            my $opponent = $player->{pairings}->[$round];
+            if ( ( defined $opponent ) && $opponent == 0 ) {
+                $byes++;
+            }
+        }
+        $times_played{$times_given_bye_key} = $byes;
 
-        push @tournament_players,
-          new_tournament_player(
-            $player->PrettyName(), $player->ID(),
-            $player->RoundWins($sr0),
+        push @tournament_players, new_tournament_player(
+            $player->PrettyName(), $player_index,
+
+            # Wins count as 2 and draws count as 1 to
+            # keep everything in integers.
+            $player->RoundWins($sr0) * 2,
             $player->RoundSpread($sr0), 0
-          );
+        );
     }
 
     my $xyzpair_config = {
@@ -130,8 +138,9 @@ sub Run ($$@) {
         always_wins_number_of_sims => 10_000,
         control_loss_threshold     => 0.15,
         number_of_rounds_remaining => $dp->MaxRound0() - $sr0,
-        lowest_ranked_payout       => $tournament->Config()->LastPrizeRank($dp->Name()) - 1,
-        gibson_spread_per_game     => 500,
+        lowest_ranked_payout =>
+          $tournament->Config()->LastPrizeRank( $dp->Name() ),
+        gibson_spread_per_game => 500,
 
         # Padded with a 0 at the beginning to account for the
         # last round always being KOTH
@@ -151,19 +160,16 @@ sub Run ($$@) {
     my $target0 = $setupp->{'target0'};
 
     for ( my $i = 0 ; $i < scalar @{$pairings} ; $i++ ) {
+
         # Convert back to 1-indexed
         my $player_id   = $i + 1;
         my $opponent_id = $pairings->[$i] + 1;
-        if ($player_id < $opponent_id) {
-          next;
+        if ( $player_id > $opponent_id and $opponent_id != 0 ) {
+
+            # We have already made this pairing
+            next;
         }
-        if ( $opponent_id == $number_of_players + 1) {
-            # This pairing is a bye
-            $dp->Pair( $player_id, 0, $target0, 1 );
-        }
-        else {
-            $dp->Pair( $player_id, $opponent_id, $target0, 1 );
-        }
+        $dp->Pair( $player_id, $opponent_id, $target0, 1 );
     }
 
     $this->TidyAfterPairing($dp);
@@ -264,9 +270,8 @@ sub reset_tournament_player {
 }
 
 sub add_bye_player {
-    my ( $tournament_players, $number_of_players ) = @_;
-    push @{$tournament_players},
-      new_tournament_player( 'BYE', $number_of_players, 0, 0, 1 );
+    my ($tournament_players) = @_;
+    push @{$tournament_players}, new_tournament_player( 'BYE', -1, 0, 0, 1 );
 }
 
 # Pairing and simming
@@ -290,12 +295,8 @@ sub xyzpair {
     my $number_of_players = scalar(@$tournament_players);
 
     if ( $number_of_players % 2 == 1 ) {
-        add_bye_player( $tournament_players, $number_of_players );
+        add_bye_player($tournament_players);
         $number_of_players = scalar(@$tournament_players);
-        if ( $number_of_players % 2 == 1 ) {
-            print("failed to add bye player");
-            exit(-1);
-        }
     }
 
     sort_tournament_players_by_record($tournament_players);
@@ -362,8 +363,8 @@ sub xyzpair {
             my $player_j = $tournament_players->[$j];
 
             my $number_of_times_played =
-              get_number_of_times_played( $player_i, $player_j,
-                $times_played_hash );
+              get_number_of_times_played( $player_i->{index},
+                $player_j->{index}, $times_played_hash );
 
             my $repeat_weight = int( ( $number_of_times_played * 2 ) *
                   ( ( $number_of_players / 3 )**3 ) );
@@ -472,7 +473,11 @@ sub xyzpair {
     }
 
     my $matching = min_weight_matching( \@edges, $max_weight );
-    my $pairings = convert_matching_to_index_pairings($matching, $tournament_players);
+    my $pairings =
+      convert_matching_to_index_pairings( $matching, $tournament_players );
+
+    # Remove 'bye' players before displaying pairings
+    @{$tournament_players} = grep { !$_->{is_bye} } @{$tournament_players};
 
     log_info( $config,
         pairings_string( $tournament_players, $pairings, $times_played_hash ) );
@@ -480,9 +485,9 @@ sub xyzpair {
 }
 
 sub get_number_of_times_played {
-    my ( $player_i, $player_j, $times_played_hash ) = @_;
+    my ( $player_i_index, $player_j_index, $times_played_hash ) = @_;
     my $times_played_key =
-      create_times_played_key( $player_i->{index}, $player_j->{index} );
+      create_times_played_key( $player_i_index, $player_j_index );
     my $number_of_times_played = 0;
     if ( exists $times_played_hash->{$times_played_key} ) {
         $number_of_times_played = $times_played_hash->{$times_played_key};
@@ -510,19 +515,31 @@ sub get_lowest_ranked_placers {
     my @lowest_ranked_placers =
       (0) x ( $number_of_players * $number_of_players );
 
-    for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
+    for (
+        my $final_rank_index = 0 ;
+        $final_rank_index < $number_of_players ;
+        $final_rank_index++
+      )
+    {
         for (
-            my $rank_index = 0 ;
-            $rank_index < $number_of_players ;
-            $rank_index++
+            my $player_current_rank_index = 0 ;
+            $player_current_rank_index < $number_of_players ;
+            $player_current_rank_index++
           )
         {
-            my $player = $tournament_players->[$rank_index];
-            my $place_percentage =
-              get_tournament_result( $factor_pair_results, $player, $i ) /
-              $config->{number_of_sims};
+            my $player = $tournament_players->[$player_current_rank_index];
+
+            # Calculate the number of sims where this player placed
+            # at or above the given rank.
+            my $sum = 0;
+            for ( my $i = 0 ; $i <= $final_rank_index ; $i++ ) {
+                $sum +=
+                  get_tournament_result( $factor_pair_results, $player, $i );
+            }
+            my $place_percentage = $sum / $config->{number_of_sims};
             if ( $place_percentage > $adjusted_hopefulness ) {
-                $lowest_ranked_placers[$i] = $rank_index;
+                $lowest_ranked_placers[$final_rank_index] =
+                  $player_current_rank_index;
             }
         }
     }
@@ -531,7 +548,7 @@ sub get_lowest_ranked_placers {
         log_info(
             $config,
             sprintf(
-                "Lowest rankest possible winner for rank %d: %d (%s)\n",
+                "Lowest ranked possible winner for rank %d: %d (%s)\n",
                 $i + 1,
                 $lowest_ranked_placers[$i] + 1,
                 $tournament_players->[ $lowest_ranked_placers[$i] ]->{name}
@@ -892,24 +909,32 @@ sub min_weight_matching {
 }
 
 sub convert_matching_to_index_pairings {
-    # This function assumes players are sorted
-    # by record
-    my ($matching, $tournament_players) = @_;
+    my ( $matching, $tournament_players ) = @_;
+
+    sort_tournament_players_by_record($tournament_players);
 
     my $number_of_players = scalar @{$tournament_players};
-    my @pairings = (0) x $number_of_players; 
-    for ( my $player_rank = 0 ; $player_rank < $number_of_players ; $player_rank++ ) {
-        my $player    = $tournament_players->[$player_rank];
+    my @pairings          = (0) x $number_of_players;
+    for (
+        my $player_rank = 0 ;
+        $player_rank < $number_of_players ;
+        $player_rank++
+      )
+    {
+        my $player   = $tournament_players->[$player_rank];
         my $opp_rank = $matching->{$player_rank};
-        if ($opp_rank < $player_rank or $player->{is_bye}) {
+        if ( $opp_rank < $player_rank ) {
             next;
         }
         my $opponent = $tournament_players->[$opp_rank];
-        $pairings[$player->{index}] = $opponent->{index};
-        $pairings[$opponent->{index}] = $player->{index};
-    }
-    if ($tournament_players->[$number_of_players - 1]->{is_bye}) {
-        pop @pairings;
+
+        if ( $player->{is_bye} ) {
+            $pairings[ $opponent->{index} ] = $player->{index};
+        }
+        else {
+            $pairings[ $player->{index} ]   = $opponent->{index};
+            $pairings[ $opponent->{index} ] = $player->{index};
+        }
     }
     return \@pairings;
 }
@@ -941,11 +966,14 @@ sub tournament_players_string {
     my $result             = '';
     for ( my $i = 0 ; $i < @$tournament_players ; $i++ ) {
         my $tp = $tournament_players->[$i];
+        my $name_and_index =
+          sprintf( "%-5s %-22s", '(' . ( $tp->{index} + 1 ) . ')',
+            $tp->{name} );
+        my $wins_string = sprintf( "%0.1f", $tp->{wins} / 2 );
         $result .= sprintf(
-            "%-3s %-20s %0.1f %d\n",
+            "%-3s %s %-4s %d\n",
             ( $i + 1 ),
-            $tp->{name}, ( $tp->{wins} / 2 ),
-            $tp->{spread}
+            $name_and_index, $wins_string, $tp->{spread}
         );
     }
     return $result;
@@ -954,37 +982,47 @@ sub tournament_players_string {
 sub pairings_string {
     my ( $tournament_players, $pairings, $times_played_hash ) = @_;
 
-    # Pairings are index based, so sort
-    # players by index
+    # Pairings are an array of player indexes
+    # order by index, so order by index before formatting
+    # to a string.
     sort_tournament_players_by_index($tournament_players);
 
-    my $result     = "\n\nPAIRINGS\n\n";
     my $number_of_players = scalar @{$tournament_players};
-    for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
-        my $player    = $tournament_players->[$i];
-        my $opp_index = $pairings->[$i];
-
-        if ($opp_index < $i) {
+    my $result = sprintf( "\n\nPAIRINGS: %d\n\n", $number_of_players );
+    for (
+        my $player_index = 0 ;
+        $player_index < $number_of_players ;
+        $player_index++
+      )
+    {
+        my $player         = $tournament_players->[$player_index];
+        my $opponent_index = $pairings->[$player_index];
+        if ( $player_index > $opponent_index and $opponent_index >= 0 ) {
             next;
         }
-
-        my $opponent = $tournament_players->[$opp_index];
-
-        my $times_played_key =
-          create_times_played_key( $player->{index}, $opponent->{index} );
-        my $number_of_times_played = 0;
-        if ( exists $times_played_hash->{$times_played_key} ) {
-            $number_of_times_played = $times_played_hash->{$times_played_key};
+        my $number_of_times_played =
+          get_number_of_times_played( $player_index, $opponent_index,
+            $times_played_hash );
+        if ( $opponent_index == -1 ) {
+            $result .= sprintf(
+                "%s (%d, %d, %d) has a bye (%d)\n",
+                $player->{name},     $player_index + 1,
+                $player->{wins} / 2, $player->{spread},
+                $number_of_times_played
+            );
         }
+        else {
+            my $opponent = $tournament_players->[$opponent_index];
 
-        $result .= sprintf(
-            "%s (%d, %d, %d) vs %s (%d, %d, %d) (%d)\n",
-            $player->{name},       $i + 1,
-            $player->{wins} / 2,   $player->{spread},
-            $opponent->{name},     $opp_index + 1,
-            $opponent->{wins} / 2, $opponent->{spread},
-            $number_of_times_played
-        );
+            $result .= sprintf(
+                "%s (%d, %d, %d) vs %s (%d, %d, %d) (%d)\n",
+                $player->{name},       $player_index + 1,
+                $player->{wins} / 2,   $player->{spread},
+                $opponent->{name},     $opponent_index + 1,
+                $opponent->{wins} / 2, $opponent->{spread},
+                $number_of_times_played
+            );
+        }
     }
     return $result;
 }

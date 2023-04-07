@@ -8,7 +8,7 @@ use warnings;
 use Getopt::Long;
 use LWP::Simple;
 
-require "./XYZpair.pm";
+require "./XYZPAIR.pm";
 
 # Parsing the t file
 
@@ -95,21 +95,6 @@ sub tournament_players_from_players_scores {
         for ( my $round = 0 ; $round < $player_number_of_scores ; $round++ ) {
             my $opponent_index = $pscores->{opponent_indexes}[$round];
 
-            my $opponent_score = 0;
-            my $is_bye         = 0;
-
-            # Handle the bye case
-            if ( $opponent_index < 0 ) {
-
-                # This round was a bye for this player
-                $opponent_index = $number_of_players;
-                $is_bye         = 1;
-            }
-            else {
-                $opponent_score =
-                  $players_scores->[$opponent_index]->{scores}[$round];
-            }
-
             my $times_played_key =
               create_times_played_key( $player_index, $opponent_index );
 
@@ -120,13 +105,23 @@ sub tournament_players_from_players_scores {
                 $times_played_hash{$times_played_key} = 1;
             }
 
-            # Account for the fact that the bye "pairing" only
-            # occurs once since the bye is not a real player.
-            # Later, all of the values in this hash will be
-            # divided by 2 to account for this. Increment
-            # here so that the value for the number of byes
-            # the player has is correct after division by 2.
-            $times_played_hash{$times_played_key} += $is_bye;
+            my $opponent_score = 0;
+
+            # Byes have already been converted from 0 to -1
+            # when reading from the t file.
+            if ( $opponent_index == -1 ) {
+                # Account for the bye "pairing" only
+                # occurring once since the bye is not a real player.
+                # Later, all of the values in this hash will be
+                # divided by 2 to account for this. Increment
+                # here so that the value for the number of byes
+                # the player has is correct after division by 2.
+                $times_played_hash{$times_played_key}++;
+            }
+            else {
+                $opponent_score =
+                  $players_scores->[$opponent_index]->{scores}[$round];
+            }
 
             my $game_spread = $pscores->{scores}[$round] - $opponent_score;
 

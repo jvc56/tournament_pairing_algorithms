@@ -106,16 +106,21 @@ sub Run ($$@) {
     my $log_filename =
       "$log_dir$timestamp" . "_div_$division_name" . "_round_$sr1.log";
 
+    my $max_round = $dp->MaxRound0();
+    my $cumulative_gibson_spreads =
+      get_cumulative_gibson_spreads(
+        $tournament->Config()->Value('gibson_spread'), $max_round );
+
     # Create the special config for xyzpair
     my $xyzpair_config = {
         log_filename               => $log_filename,
         number_of_sims             => 100_000,
         always_wins_number_of_sims => 10_000,
         control_loss_threshold     => 0.15,
-        number_of_rounds_remaining => $dp->MaxRound0() - $sr0,
+        number_of_rounds_remaining => $max_round - $sr0,
         lowest_ranked_payout =>
           $tournament->Config()->LastPrizeRank( $dp->Name() ),
-        gibson_spread_per_game => 500,
+        cumulative_gibson_spreads => $cumulative_gibson_spreads,
 
         # Padded with a 0 at the beginning to account for the
         # last round always being KOTH
@@ -316,6 +321,35 @@ sub add_bye_player {
     # This display index can be the same as the original index
     push @{$tournament_players},
       new_tournament_player( 'BYE', -1, -1, 0, 0, 1 );
+}
+
+# Gibson spread
+
+sub get_cumulative_gibson_spreads {
+    my ( $gibson_spread, $max_round ) = @_;
+
+    my $number_of_gibson_spreads  = scalar @{$gibson_spread};
+    my @cumulative_gibson_spreads = (0) x ( $max_round + 1 );
+
+    my $last_gibson_spread;
+    for ( my $i = 0 ; $i <= $max_round ; $i++ ) {
+        if ( $i == 0 ) {
+            $cumulative_gibson_spreads[$i] = $gibson_spread->[$i] * 2;
+            $last_gibson_spread = $gibson_spread->[$i] * 2;
+        }
+        else {
+            $cumulative_gibson_spreads[$i] =
+              $cumulative_gibson_spreads[ $i - 1 ];
+            if ( $i < $number_of_gibson_spreads ) {
+                $cumulative_gibson_spreads[$i] += $gibson_spread->[$i] * 2;
+                $last_gibson_spread = $gibson_spread->[$i] * 2;
+            }
+            else {
+                $cumulative_gibson_spreads[$i] += $last_gibson_spread;
+            }
+        }
+    }
+    return \@cumulative_gibson_spreads;
 }
 
 # Pairing and simming
@@ -728,11 +762,11 @@ sub get_lowest_gibson_rank {
         if (
             ( $player_in_nth->{wins} - $player_in_nplus1th->{wins} ) / 2 >
             $config->{number_of_rounds_remaining}
-            || ( ( $player_in_nth->{wins} - $player_in_nplus1th->{wins} ) /
-                2 == $config->{number_of_rounds_remaining}
+            || ( ( $player_in_nth->{wins} - $player_in_nplus1th->{wins} ) / 2 ==
+                   $config->{number_of_rounds_remaining}
                 && $player_in_nth->{spread} - $player_in_nplus1th->{spread} >
-                $config->{gibson_spread_per_game} *
-                $config->{number_of_rounds_remaining} )
+                $config->{cumulative_gibson_spreads}
+                ->[ $config->{number_of_rounds_remaining} - 1 ] )
           )
         {
             # Player in nth is gibsonized for nth place
@@ -754,8 +788,7 @@ sub get_sim_tournament_players {
         my $player = $tournament_players->[$i];
 
         # # Divide wins by 2 because wins are worth 2 and draws are worth 1
-        my $can_technically_cash =
-          $i <= $config->{lowest_ranked_payout}
+        my $can_technically_cash = $i <= $config->{lowest_ranked_payout}
           || (
             $tournament_players->[ $config->{lowest_ranked_payout} ]->{wins} -
             $player->{wins} ) / 2 <= $config->{number_of_rounds_remaining};

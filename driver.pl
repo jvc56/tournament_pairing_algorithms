@@ -224,6 +224,11 @@ sub main {
     my $timestamp = localtime();
     $timestamp =~ s/[\s\:]/_/g;
 
+    my $max_round = $final - 1;
+
+    my $cumulative_gibson_spreads =
+      get_cumulative_gibson_spreads( [ 250, 200, 200 ], $max_round );
+
     my $config = {
         log_filename => "$log_dir$timestamp" . "_div_somediv_round_$start.log",
         number_of_sims             => $number_of_sims,
@@ -231,7 +236,7 @@ sub main {
         control_loss_threshold     => 0.15,
         number_of_rounds_remaining => $final - $start,
         lowest_ranked_payout       => $lowest_ranked_payout,
-        gibson_spread_per_game     => 500,
+        cumulative_gibson_spreads  => $cumulative_gibson_spreads,
 
         # Padded with a 0 at the beginning to account for the
         # last round always being KOTH

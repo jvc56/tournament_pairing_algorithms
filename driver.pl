@@ -137,8 +137,8 @@ sub tournament_players_from_players_scores {
         }
 
         push @tournament_players,
-          new_tournament_player( $pscores->{name}, $pscores->{index}, $wins,
-            $spread, 0 );
+          new_tournament_player( $pscores->{name}, $pscores->{index},
+            $pscores->{index}, $wins, $spread, 0 );
     }
 
     for my $times_played_key ( keys %times_played_hash ) {
@@ -237,6 +237,8 @@ sub main {
         # last round always being KOTH
         hopefulness => [ 0, 0, 0.1, 0.05, 0.01, 0.0025 ]
     };
+
+    log_info( $config, Dumper($config) );
 
     xyzpair( $config, $tournament_players, $times_played_hash );
 }

@@ -226,21 +226,15 @@ sub main {
 
     my $max_round = $final - 1;
 
-    my $cumulative_gibson_spreads =
-      get_cumulative_gibson_spreads( [ 250, 200, 200 ], $max_round );
-
     my $config = {
         log_filename => "$log_dir$timestamp" . "_div_somediv_round_$start.log",
         number_of_sims             => $number_of_sims,
         always_wins_number_of_sims => 10_000,
-        control_loss_threshold     => 0.15,
         number_of_rounds_remaining => $final - $start,
         lowest_ranked_payout       => $lowest_ranked_payout,
-        cumulative_gibson_spreads  => $cumulative_gibson_spreads,
-
-        # Padded with a 0 at the beginning to account for the
-        # last round always being KOTH
-        hopefulness => [ 0, 0, 0.1, 0.05, 0.01, 0.0025 ]
+        cumulative_gibson_spreads  => get_cumulative_gibson_spreads( [ 250, 200, 200 ], $max_round ),
+        control_loss_thresholds    => extend_tsh_config_array([0.15], $max_round),
+        hopefulness => extend_tsh_config_array([0, 0.0025, 0.01, 0.05, 0.1], $max_round),
     };
 
     log_info( $config, Dumper($config) );

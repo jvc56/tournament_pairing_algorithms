@@ -107,29 +107,51 @@ sub Run ($$@) {
       "$log_dir$timestamp" . "_div_$division_name" . "_round_$sr1.log";
 
     my $max_round     = $dp->MaxRound0();
+
+    # Extract TSH config vars
+
     my $gibson_spread = $tournament->Config()->Value('gibson_spread');
-    if ( !defined $gibson_spread ) {
+    if ( !defined $gibson_spread || scalar @{$gibson_spread} == 0 ) {
         $tournament->TellUser( 'ebadconfigarray',
             'gibson_spread', $gibson_spread );
         return 0;
     }
-    my $cumulative_gibson_spreads =
-      get_cumulative_gibson_spreads( $gibson_spread, $max_round );
+
+    my $number_of_sims = $tournament->Config()->Value('simulations');
+    if (!defined $number_of_sims) {
+        $tournament->TellUser( 'ebadconfigentry', 'simulations' );
+        return 0;
+    }
+
+    my $always_wins_number_of_sims = $tournament->Config()->Value('always_wins_simulations');
+    if (!defined $always_wins_number_of_sims) {
+        $tournament->TellUser( 'ebadconfigentry', 'always_wins_simulations' );
+        return 0;
+    }
+
+    my $control_loss_thresholds = $tournament->Config()->Value('control_loss_thresholds');
+    if (!defined $control_loss_thresholds || scalar @{$control_loss_thresholds} == 0 ) {
+        $tournament->TellUser( 'ebadconfigarray', 'control_loss_thresholds', $control_loss_thresholds );
+        return 0;
+    }
+
+    my $hopefulness = $tournament->Config()->Value('hopefulness');
+    if (!defined $hopefulness || scalar @{$hopefulness} == 0 ) {
+        $tournament->TellUser( 'ebadconfigarray', 'hopefulness', $hopefulness );
+        return 0;
+    }
 
     # Create the special config for xyzpair
     my $xyzpair_config = {
         log_filename               => $log_filename,
-        number_of_sims             => 100_000,
-        always_wins_number_of_sims => 10_000,
-        control_loss_threshold     => 0.15,
+        number_of_sims             => $number_of_sims,
+        always_wins_number_of_sims => $always_wins_number_of_sims,
+        control_loss_thresholds    => extend_tsh_config_array($control_loss_thresholds, $max_round),
         number_of_rounds_remaining => $max_round - $sr0,
         lowest_ranked_payout =>
           $tournament->Config()->LastPrizeRank( $dp->Name() ),
-        cumulative_gibson_spreads => $cumulative_gibson_spreads,
-
-        # Padded with a 0 at the beginning to account for the
-        # last round always being KOTH
-        hopefulness => [ 0, 0, 0.1, 0.05, 0.01, 0.0025 ]
+        cumulative_gibson_spreads => get_cumulative_gibson_spreads( $gibson_spread, $max_round ),
+        hopefulness => extend_tsh_config_array($hopefulness, $max_round),
     };
 
     log_info( $xyzpair_config,
@@ -357,6 +379,28 @@ sub get_cumulative_gibson_spreads {
     return \@cumulative_gibson_spreads;
 }
 
+# Control loss
+
+sub extend_tsh_config_array {
+    my ( $array, $max_round ) = @_;
+
+    my $number_of_entries  = scalar @{$array};
+    my @full_array = (0) x ( $max_round + 1 );
+
+    my $last_entry;
+    for ( my $i = 0 ; $i <= $max_round ; $i++ ) {
+        if ( $i < $number_of_entries ) {
+            $full_array[$i] = $array->[$i];
+            $last_entry = $array->[$i];
+        }
+        else {
+            $full_array[$i] = $last_entry;
+        }
+    }
+    return \@full_array;
+}
+
+
 # Pairing and simming
 
 sub xyzpair {
@@ -402,6 +446,22 @@ sub xyzpair {
     my ( $lowest_ranked_always_wins, $control_loss ) =
       get_control_loss( $config, $factor_pair_results,
         $sim_tournament_players );
+
+    my $adjusted_control_loss_threshold = 0;
+    if ( ($config->{number_of_rounds_remaining} - 1) <
+        scalar( @{ $config->{control_loss_thresholds} } ) )
+    {
+        $adjusted_control_loss_threshold =
+          $config->{control_loss_thresholds}->[ $config->{number_of_rounds_remaining} - 1 ];
+    }
+
+    log_info(
+        $config,
+        sprintf(
+            "\nAdjusted control loss threshold: %f\n",
+            $adjusted_control_loss_threshold,
+        )
+    );
 
     my $lowest_gibson_rank =
       get_lowest_gibson_rank( $config, $sim_tournament_players );
@@ -453,7 +513,7 @@ sub xyzpair {
         sprintf(
 "\n\nWeights\n\n%-92s | %-3s = %7s = %7s + %7s + %7s + %7s + %7s + %7s\n",
             "Pairing",  "Rpt",     "Total",  "Repeats", "RankDif",
-            "RankPair", "Control", "Gibson", "KOTH"
+            "RankPr", "Control", "Gibson", "KOTH"
         )
     );
 
@@ -546,7 +606,7 @@ sub xyzpair {
                     # Only applies to the player in first
                     if (   $i == 0
                         && $j > $lowest_ranked_always_wins
-                        && $control_loss >= $config->{control_loss_threshold} )
+                        && $adjusted_control_loss_threshold )
                     {
                         $control_loss_weight = PROHIBITIVE_WEIGHT;
                     }
@@ -613,7 +673,7 @@ sub get_lowest_ranked_placers {
     my $sim_number_of_players = scalar @{$sim_tournament_players};
 
     my $adjusted_hopefulness = 0;
-    if ( $config->{number_of_rounds_remaining} <
+    if ( ($config->{number_of_rounds_remaining}) <
         scalar( @{ $config->{hopefulness} } ) )
     {
         $adjusted_hopefulness =

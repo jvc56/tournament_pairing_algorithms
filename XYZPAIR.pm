@@ -94,7 +94,7 @@ sub Run ($$@) {
     mkdir $log_dir;
 
     if ( !-e $log_dir ) {
-        $tournament->TellUser( 'epfail',
+        $tournament->TellUser( 'eapfail',
             "failed to create directory %log_dir" );
         return 0;
     }
@@ -106,10 +106,15 @@ sub Run ($$@) {
     my $log_filename =
       "$log_dir$timestamp" . "_div_$division_name" . "_round_$sr1.log";
 
-    my $max_round = $dp->MaxRound0();
+    my $max_round     = $dp->MaxRound0();
+    my $gibson_spread = $tournament->Config()->Value('gibson_spread');
+    if ( !defined $gibson_spread ) {
+        $tournament->TellUser( 'ebadconfigarray',
+            'gibson_spread', $gibson_spread );
+        return 0;
+    }
     my $cumulative_gibson_spreads =
-      get_cumulative_gibson_spreads(
-        $tournament->Config()->Value('gibson_spread'), $max_round );
+      get_cumulative_gibson_spreads( $gibson_spread, $max_round );
 
     # Create the special config for xyzpair
     my $xyzpair_config = {

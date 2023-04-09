@@ -197,13 +197,17 @@ sub create_xyzpair_config_and_get_pairings {
         $number_of_sims,          $always_wins_number_of_sims,
         $lowest_ranked_payout,    $gibson_spreads,
         $control_loss_thresholds, $hopefulness,
-        $log_filename, $filename
+        $log_filename,            $filename
     ) = @_;
 
     # Test cases for xyzpair
-    my $config =
-      create_xyzpair_config( $start_round, $final_round, $number_of_sims, $always_wins_number_of_sims, $lowest_ranked_payout,
-      $gibson_spreads, $control_loss_thresholds, $hopefulness, $log_filename);
+    my $config = create_xyzpair_config(
+        $start_round,             $final_round,
+        $number_of_sims,          $always_wins_number_of_sims,
+        $lowest_ranked_payout,    $gibson_spreads,
+        $control_loss_thresholds, $hopefulness,
+        $log_filename
+    );
 
     my ( $tournament_players, $times_played_hash ) =
       tournament_players_from_tfile( $filename, $start_round );
@@ -212,10 +216,13 @@ sub create_xyzpair_config_and_get_pairings {
 }
 
 sub test_xyzpair {
+
     # Test cases for xyzpair
-    my $pairings =
-      create_xyzpair_config_and_get_pairings( 21, 23, 100_000, 10_000, 4, [ 250, 200, 200 ],
-        [0.15], [ 0, 0.0025, 0.01, 0.05, 0.1 ], "xyzpair_logs/yeet.log", "a.t" );
+    my $pairings = create_xyzpair_config_and_get_pairings(
+        21, 23, 100_000, 10_000, 4, [ 250, 200, 200 ],
+        [0.15], [ 0, 0.0025, 0.01, 0.05, 0.1 ],
+        "xyzpair_logs/a.log", "a.t"
+    );
 }
 
 sub main {

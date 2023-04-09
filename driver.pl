@@ -158,6 +158,66 @@ sub tournament_players_from_tfile {
     return ( $tournament_players, $times_played_hash );
 }
 
+sub create_xyzpair_config {
+    my (
+        $start_round,             $final_round,
+        $number_of_sims,          $always_wins_number_of_sims,
+        $lowest_ranked_payout,    $gibson_spreads,
+        $control_loss_thresholds, $hopefulness,
+        $log_filename
+    ) = @_;
+
+    return {
+        log_filename               => $log_filename,
+        number_of_sims             => $number_of_sims,
+        always_wins_number_of_sims => $always_wins_number_of_sims,
+        number_of_rounds_remaining => $final_round - $start_round,
+        lowest_ranked_payout       => $lowest_ranked_payout,
+        cumulative_gibson_spreads =>
+          get_cumulative_gibson_spreads( $gibson_spreads, $final_round - 1 ),
+        control_loss_thresholds =>
+          extend_tsh_config_array( $control_loss_thresholds, $final_round - 1 ),
+        hopefulness =>
+          extend_tsh_config_array( $hopefulness, $final_round - 1 ),
+    };
+}
+
+sub get_pairings {
+    my ( $filename, $config, $start_round ) = @_;
+
+    my ( $tournament_players, $times_played_hash ) =
+      tournament_players_from_tfile( $filename, $start_round );
+
+    return xyzpair( $config, $tournament_players, $times_played_hash );
+}
+
+sub create_xyzpair_config_and_get_pairings {
+    my (
+        $start_round,             $final_round,
+        $number_of_sims,          $always_wins_number_of_sims,
+        $lowest_ranked_payout,    $gibson_spreads,
+        $control_loss_thresholds, $hopefulness,
+        $log_filename, $filename
+    ) = @_;
+
+    # Test cases for xyzpair
+    my $config =
+      create_xyzpair_config( $start_round, $final_round, $number_of_sims, $always_wins_number_of_sims, $lowest_ranked_payout,
+      $gibson_spreads, $control_loss_thresholds, $hopefulness, $log_filename);
+
+    my ( $tournament_players, $times_played_hash ) =
+      tournament_players_from_tfile( $filename, $start_round );
+
+    return xyzpair( $config, $tournament_players, $times_played_hash );
+}
+
+sub test_xyzpair {
+    # Test cases for xyzpair
+    my $pairings =
+      create_xyzpair_config_and_get_pairings( 21, 23, 100_000, 10_000, 4, [ 250, 200, 200 ],
+        [0.15], [ 0, 0.0025, 0.01, 0.05, 0.1 ], "xyzpair_logs/yeet.log", "a.t" );
+}
+
 sub main {
 
     my $payout = 1;
@@ -165,7 +225,8 @@ sub main {
     my $final;
     my $tfile;
     my $url;
-    my $sim = 100000;
+    my $sim  = 100000;
+    my $test = 0;
 
     GetOptions(
         "payout=s" => \$payout,
@@ -173,8 +234,14 @@ sub main {
         "final=s"  => \$final,
         "tfile=s"  => \$tfile,
         "url=s"    => \$url,
-        "sim=s"    => \$sim
+        "sim=s"    => \$sim,
+        "test"     => \$test
     );
+
+    if ($test) {
+        test_xyzpair();
+        return;
+    }
 
     if ( !$final ) {
         print "required: final\n";
@@ -224,18 +291,19 @@ sub main {
     my $timestamp = localtime();
     $timestamp =~ s/[\s\:]/_/g;
 
-    my $max_round = $final - 1;
+    my $log_filename = "$log_dir$timestamp" . "_div_somediv_round_$start.log";
 
-    my $config = {
-        log_filename => "$log_dir$timestamp" . "_div_somediv_round_$start.log",
-        number_of_sims             => $number_of_sims,
-        always_wins_number_of_sims => 10_000,
-        number_of_rounds_remaining => $final - $start,
-        lowest_ranked_payout       => $lowest_ranked_payout,
-        cumulative_gibson_spreads  => get_cumulative_gibson_spreads( [ 250, 200, 200 ], $max_round ),
-        control_loss_thresholds    => extend_tsh_config_array([0.15], $max_round),
-        hopefulness => extend_tsh_config_array([0, 0.0025, 0.01, 0.05, 0.1], $max_round),
-    };
+    my $config = create_xyzpair_config(
+        $start,
+        $final,
+        $number_of_sims,
+        10_000,
+        $lowest_ranked_payout,
+        [ 250, 200, 200 ],
+        [0.15],
+        [ 0, 0.0025, 0.01, 0.05, 0.1 ],
+        "$log_dir$timestamp" . "_div_somediv_round_$start.log"
+    );
 
     log_info( $config, Dumper($config) );
 

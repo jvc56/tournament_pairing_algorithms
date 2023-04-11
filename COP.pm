@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 
-package TSH::Command::XYZPAIR;
+package TSH::Command::COP;
 
 use strict;
 use warnings;
@@ -12,7 +12,7 @@ use TSH::Player;
 use TSH::Utility qw(Debug);
 use TSH::Utility qw(Debug DebugOn DebugOff);
 
-# Needed by XYZPAIR
+# Needed by COP
 use File::Basename;
 use Data::Dumper;
 use Graph::Matching qw(max_weight_matching);
@@ -23,11 +23,11 @@ our (@ISA) = qw(TSH::PairingCommand);
 
 =head1 NAME
 
-TSH::Command::XYZPAIR - implement the C<tsh> XYZPAIR command
+TSH::Command::COP - implement the C<tsh> COP command
 
 =head1 SYNOPSIS
 
-  my $command = new TSH::Command::XYZPAIR;
+  my $command = new TSH::Command::COP;
   my $argsp = $command->ArgumentTypes();
   my $helptext = $command->Help();
   my (@names) = $command->Names();
@@ -35,7 +35,7 @@ TSH::Command::XYZPAIR - implement the C<tsh> XYZPAIR command
   
 =head1 ABSTRACT
 
-TSH::Command::XYZPAIR is a subclass of TSH::Command.
+TSH::Command::COP is a subclass of TSH::Command.
 
 =cut
 
@@ -62,9 +62,9 @@ sub initialise ($$$$) {
     my $argtypesp = shift;
 
     $this->{'help'} = <<'EOF';
-Use the XYZPAIR command to automatically pair a round.
+Use the COP command to automatically pair a round.
 EOF
-    $this->{'names'}    = [qw(xyzpair)];
+    $this->{'names'}    = [qw(cop)];
     $this->{'argtypes'} = [qw(BasedOnRound Division)];
 
     # print "names=@$namesp argtypes=@$argtypesp\n";
@@ -89,7 +89,7 @@ sub Run ($$@) {
 
     # Create log directory
     my $log_dir =
-      sprintf( "%s/xyzpair_logs/", $tournament->Config()->{root_directory} );
+      sprintf( "%s/cop_logs/", $tournament->Config()->{root_directory} );
 
     mkdir $log_dir;
 
@@ -146,24 +146,33 @@ sub Run ($$@) {
         return 0;
     }
 
-    # Create the special config for xyzpair
-    my $xyzpair_config = {
+    my $lowest_ranked_payout =
+      get_lowest_ranked_payout( $tournament->Config(), $division_name );
+    if ( $lowest_ranked_payout < 0 ) {
+        $tournament->TellUser( 'ebadconfigentry', 'prizes' );
+        return 0;
+    }
+
+    # Create the special config for cop
+    my $cop_config = {
         log_filename               => $log_filename,
         number_of_sims             => $number_of_sims,
         always_wins_number_of_sims => $always_wins_number_of_sims,
         control_loss_thresholds =>
           extend_tsh_config_array( $control_loss_thresholds, $max_round ),
         number_of_rounds_remaining => $max_round - $sr0,
-        lowest_ranked_payout =>
-          $tournament->Config()->LastPrizeRank( $dp->Name() ),
+        lowest_ranked_payout       => $lowest_ranked_payout,
         cumulative_gibson_spreads =>
           get_cumulative_gibson_spreads( $gibson_spread, $max_round ),
         hopefulness => extend_tsh_config_array( $hopefulness, $max_round ),
     };
 
-    log_info( $xyzpair_config,
-"Started at $timestamp for $division_name round $sr1 \n\nXYZPAIR Config:\n\n"
-          . Dumper($xyzpair_config) );
+    print( Dumper($cop_config) );
+    die;
+
+    log_info( $cop_config,
+"Started at $timestamp for $division_name round $sr1 \n\nCOP Config:\n\n"
+          . Dumper($cop_config) );
 
     my %times_played = ();
 
@@ -184,7 +193,7 @@ sub Run ($$@) {
             $times_played{$times_played_key} = $number_of_times_played;
         }
 
-        # For XYZPAIR we treat the bye index as -1
+        # For COP we treat the bye index as -1
         my $times_given_bye_key = create_times_played_key( $player_index, -1 );
 
         # Count the byes by up to the based on round
@@ -209,8 +218,7 @@ sub Run ($$@) {
         );
     }
 
-    my $pairings =
-      xyzpair( $xyzpair_config, \@tournament_players, \%times_played );
+    my $pairings = cop( $cop_config, \@tournament_players, \%times_played );
 
     my $setupp = $this->SetupForPairings(
         'division' => $dp,
@@ -361,6 +369,28 @@ sub add_bye_player {
       new_tournament_player( 'BYE', -1, -1, 0, 0, 1 );
 }
 
+# Extract lowest payout rank
+
+sub get_lowest_ranked_payout {
+    my ( $tsh_config, $division_name ) = @_;
+
+    my $prizes_config = $tsh_config->{prizes};
+
+    my $lowest_ranked_payout = -1;
+    for ( my $i = 0 ; $i < scalar @{$prizes_config} ; $i++ ) {
+        my $prize_specification = $prizes_config->[$i];
+        if (   $prize_specification->{division}
+            && uc( $prize_specification->{division} ) eq uc($division_name)
+            && $prize_specification->{type} eq 'rank'
+            && !$prize_specification->{class}
+            && $prize_specification->{subtype} > $lowest_ranked_payout )
+        {
+            $lowest_ranked_payout = $prize_specification->{subtype};
+        }
+    }
+    return $lowest_ranked_payout;
+}
+
 # Gibson spread
 
 sub get_cumulative_gibson_spreads {
@@ -413,7 +443,7 @@ sub extend_tsh_config_array {
 
 # Pairing and simming
 
-sub xyzpair {
+sub cop {
     my ( $config, $tournament_players, $times_played_hash ) = @_;
 
     # Lowest ranked payout was given as 1-indexed
@@ -584,9 +614,9 @@ sub xyzpair {
                 elsif ( $i > $lowest_gibson_rank && $j > $lowest_gibson_rank ) {
 
                     # Neither player is gibsonized
-                    if ( $i <= $config->{lowest_ranked_payout} ) {
+                    if ( $i <= $lowest_ranked_player_within_payout ) {
 
-                        # player i is at a cash payout rank
+                        # player i can still cash
                         if (
                             $j <= $lowest_ranked_placers->[$i]
                             || (   $i == $lowest_ranked_placers->[$i]

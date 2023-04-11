@@ -1,3 +1,4 @@
 *.txt
-xyzpair_logs
+cop_logs
+*test_data*
 *nyt*

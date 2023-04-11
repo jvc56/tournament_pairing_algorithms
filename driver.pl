@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 
-package TSH::Command::XYZPAIR;
+package TSH::Command::COP;
 
 use strict;
 use warnings;
@@ -8,7 +8,7 @@ use warnings;
 use Getopt::Long;
 use LWP::Simple;
 
-require "./XYZPAIR.pm";
+require "./COP.pm";
 
 # Parsing the t file
 
@@ -158,7 +158,7 @@ sub tournament_players_from_tfile {
     return ( $tournament_players, $times_played_hash );
 }
 
-sub create_xyzpair_config {
+sub create_cop_config {
     my (
         $start_round,             $final_round,
         $number_of_sims,          $always_wins_number_of_sims,
@@ -188,10 +188,10 @@ sub get_pairings {
     my ( $tournament_players, $times_played_hash ) =
       tournament_players_from_tfile( $filename, $start_round );
 
-    return xyzpair( $config, $tournament_players, $times_played_hash );
+    return cop( $config, $tournament_players, $times_played_hash );
 }
 
-sub create_xyzpair_config_and_get_pairings {
+sub create_cop_config_and_get_pairings {
     my (
         $start_round,             $final_round,
         $number_of_sims,          $always_wins_number_of_sims,
@@ -200,8 +200,8 @@ sub create_xyzpair_config_and_get_pairings {
         $log_filename,            $filename
     ) = @_;
 
-    # Test cases for xyzpair
-    my $config = create_xyzpair_config(
+    # Test cases for cop
+    my $config = create_cop_config(
         $start_round,             $final_round,
         $number_of_sims,          $always_wins_number_of_sims,
         $lowest_ranked_payout,    $gibson_spreads,
@@ -212,17 +212,78 @@ sub create_xyzpair_config_and_get_pairings {
     my ( $tournament_players, $times_played_hash ) =
       tournament_players_from_tfile( $filename, $start_round );
 
-    return xyzpair( $config, $tournament_players, $times_played_hash );
+    return cop( $config, $tournament_players, $times_played_hash );
 }
 
-sub test_xyzpair {
+sub get_all_test_directories {
+  my $dir = 'tourney_test_data';
+  opendir(my $dh, $dir) || die "Can't open directory $dir: $!";
+  my @files = readdir($dh);
+  closedir($dh);
 
-    # Test cases for xyzpair
-    my $pairings = create_xyzpair_config_and_get_pairings(
-        21, 23, 100_000, 10_000, 4, [ 250, 200, 200 ],
-        [0.15], [ 0, 0.0025, 0.01, 0.05, 0.1 ],
-        "xyzpair_logs/a.log", "a.t"
-    );
+  my @file_paths;
+  foreach my $file (@files) {
+    next if $file =~ /^\./; # Skip hidden files
+    my $file_path = "$dir/$file";
+    push @file_paths, $file_path;
+  }
+
+  return \@file_paths;
+}
+
+sub get_t_files {
+  my ($dir_name) = @_;
+  opendir(my $dh, $dir_name) || die "Can't open directory $dir_name: $!";
+  my @files = readdir($dh);
+  closedir($dh);
+
+  my @t_files;
+  foreach my $file (@files) {
+    next if $file =~ /^\./; # Skip hidden files
+    my $file_path = "$dir_name/$file";
+    if (-f $file_path && $file =~ /\.t$/) {
+      push @t_files, $file_path;
+    }
+  }
+
+  return \@t_files;
+}
+
+sub get_tsh_config_info {
+  my ($filename) = @_;
+  open(my $fh, '<', $filename) || die "Can't open file $filename: $!";
+
+  my $max_rounds;
+  my %lowest_ranked_payouts = ();
+  while (my $line = <$fh>) {
+    chomp $line;
+    if ($line =~ /^config\s+max_rounds\s+=\s+(\d+)/) {
+      $max_rounds = $1;
+    } elsif (!($line =~ /class/) && $line =~ /^prize\s+rank\s+(\d+)\s+(\w+)/) {
+        my $rank = $1;
+        my $division = uc($2);
+        my $number_of_times_played = 0;
+        if ( !exists $lowest_ranked_payouts{$division} || ($lowest_ranked_payouts{$division} < $rank) ) {
+            $lowest_ranked_payouts{$division} = $rank;
+        }
+    }
+  }
+
+  close $fh;
+
+  return \%lowest_ranked_payouts, $max_rounds;
+}
+
+
+sub test_cop {
+    my $test_directories = get_all_test_directories();
+
+    for (my $i = 0; $i < scalar @{$test_directories}; $i++) {
+        my $test_directory = $test_directories->[$i];
+        print("$test_directory\n\n" . Dumper(get_t_files($test_directory)));
+        my $config_file = $test_directory . "/config.tsh";
+        print(Dumper(get_tsh_config_info($config_file)));
+    }    
 }
 
 sub main {
@@ -246,7 +307,7 @@ sub main {
     );
 
     if ($test) {
-        test_xyzpair();
+        test_cop();
         return;
     }
 
@@ -287,7 +348,7 @@ sub main {
     my ( $tournament_players, $times_played_hash ) =
       tournament_players_from_tfile( $filename, $start );
 
-    my $log_dir = "./xyzpair_logs/";
+    my $log_dir = "./cop_logs/";
 
     mkdir $log_dir;
 
@@ -300,7 +361,7 @@ sub main {
 
     my $log_filename = "$log_dir$timestamp" . "_div_somediv_round_$start.log";
 
-    my $config = create_xyzpair_config(
+    my $config = create_cop_config(
         $start,
         $final,
         $number_of_sims,
@@ -314,7 +375,7 @@ sub main {
 
     log_info( $config, Dumper($config) );
 
-    xyzpair( $config, $tournament_players, $times_played_hash );
+    cop( $config, $tournament_players, $times_played_hash );
 }
 
 main();

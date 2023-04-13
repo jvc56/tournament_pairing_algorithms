@@ -167,13 +167,6 @@ sub Run ($$@) {
         hopefulness => extend_tsh_config_array( $hopefulness, $max_round ),
     };
 
-    print( Dumper($cop_config) );
-    die;
-
-    log_info( $cop_config,
-"Started at $timestamp for $division_name round $sr1 \n\nCOP Config:\n\n"
-          . Dumper($cop_config) );
-
     my %times_played = ();
 
     # Iterate through the players in a division
@@ -446,6 +439,8 @@ sub extend_tsh_config_array {
 sub cop {
     my ( $config, $tournament_players, $times_played_hash ) = @_;
 
+    log_info( $config, "\n\nCOP Config:\n\n" . Dumper($config) );
+
     # Lowest ranked payout was given as 1-indexed
     # To keep this consistent with the rest of the 0-indexed
     # code in these functions, we convert it to 0-indexed here.
@@ -483,9 +478,17 @@ sub cop {
     my $factor_pair_results =
       sim_factor_pair( $config, $sim_tournament_players );
 
-    my ( $lowest_ranked_always_wins, $control_loss ) =
-      get_control_loss( $config, $factor_pair_results,
-        $sim_tournament_players );
+    my $lowest_gibson_rank =
+      get_lowest_gibson_rank( $config, $sim_tournament_players );
+
+    my $lowest_ranked_always_wins = -1;
+    my $control_loss              = -1;
+
+    if ( $lowest_gibson_rank < 0 ) {
+        ( $lowest_ranked_always_wins, $control_loss ) =
+          get_control_loss( $config, $factor_pair_results,
+            $sim_tournament_players );
+    }
 
     my $adjusted_control_loss_threshold = 0;
     if ( ( $config->{number_of_rounds_remaining} - 1 ) <
@@ -502,9 +505,6 @@ sub cop {
             $adjusted_control_loss_threshold,
         )
     );
-
-    my $lowest_gibson_rank =
-      get_lowest_gibson_rank( $config, $sim_tournament_players );
 
     log_info( $config, "\n\nGibsons\n\n" );
 
@@ -561,8 +561,9 @@ sub cop {
     # using all of the tournament players since
     # everyone needs to be paired
 
-    my $max_weight = 0;
-    my @edges      = ();
+    my $max_weight  = 0;
+    my @edges       = ();
+    my %weight_hash = ();
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player_i = $tournament_players->[$i];
         for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
@@ -599,7 +600,8 @@ sub cop {
                     }
                 }
             }
-            else {
+            elsif ( !$player_j->{is_bye} ) {
+
                 # If neither of these blocks are true, that means both
                 # players are gibsonized and we don't have to consider
                 # control loss or placement.
@@ -646,7 +648,7 @@ sub cop {
                     # Only applies to the player in first
                     if (   $i == 0
                         && $j > $lowest_ranked_always_wins
-                        && $adjusted_control_loss_threshold )
+                        && $control_loss > $adjusted_control_loss_threshold )
                     {
                         $control_loss_weight = PROHIBITIVE_WEIGHT;
                     }
@@ -680,6 +682,11 @@ sub cop {
                     $koth_weight
                 )
             );
+            $weight_hash{
+                create_weight_hash_key(
+                    $player_i->{index}, $player_j->{index}
+                )
+            } = $weight;
             push @edges, [ $i, $j, $weight ];
         }
     }
@@ -688,12 +695,44 @@ sub cop {
     my $pairings =
       convert_matching_to_index_pairings( $matching, $tournament_players );
 
+    my $weight_sum = 0;
+    for ( my $i = 0 ; $i < scalar @{$pairings} ; $i++ ) {
+        my $j = $pairings->[$i];
+
+        # Use $j == -1 to detect the index of the bye player
+        if ( $i < $j || $j == -1 ) {
+            my $weight_hash_key = create_weight_hash_key( $i, $j );
+            my $pairing_weight  = $weight_hash{$weight_hash_key};
+            if ( $pairing_weight > PROHIBITIVE_WEIGHT ) {
+                log_info(
+                    $config,
+                    sprintf(
+"WARNING: Pairing exceeds prohibitive weight (%d): %s vs %s\n",
+                        $pairing_weight,
+                        player_string( $tournament_players->[$i], $i ),
+                        player_string( $tournament_players->[$j], $j )
+                    )
+                );
+            }
+            $weight_sum += $pairing_weight;
+        }
+    }
+
+    log_info( $config, sprintf( "\nTotal Weight: %d\n", $weight_sum ) );
+
     # Remove 'bye' players before displaying pairings
     @{$tournament_players} = grep { !$_->{is_bye} } @{$tournament_players};
 
     log_info( $config,
         pairings_string( $tournament_players, $pairings, $times_played_hash ) );
     return $pairings;
+}
+
+sub create_weight_hash_key {
+
+    # It is assumed that $i < $j
+    my ( $i, $j ) = @_;
+    return create_times_played_key( $i, $j );
 }
 
 sub get_number_of_times_played {
@@ -827,6 +866,9 @@ sub get_control_loss {
 
     for ( my $i = 0 ; $i < scalar @$always_wins_pair_player_with_first ; $i++ )
     {
+        if ( $sim_tournament_players->[ $i + 1 ]->{is_bye} ) {
+            next;
+        }
         log_info(
             $config,
             sprintf(
@@ -964,8 +1006,20 @@ sub sim_player_always_wins {
 
         my $pwf_wins = 0;
         my $fp_wins  = 0;
-        my $player_in_nth_rank_index_index =
-          $sim_tournament_players->[$player_in_nth_rank_index]->{index};
+        my $player_in_nth =
+          $sim_tournament_players->[$player_in_nth_rank_index];
+
+        if ( $player_in_nth->{is_bye} ) {
+
+            # Push zeroes so that the ranked players align with the index
+            # This shouldn't strictly be necessary anyway since byes
+            # should always be last
+            push @pair_with_first_tournament_wins, 0;
+            push @factor_pair_tournament_wins,     0;
+            next;
+        }
+
+        my $player_in_nth_index = $player_in_nth->{index};
 
         for ( my $i = 0 ; $i < $config->{always_wins_number_of_sims} ; $i++ ) {
             for (
@@ -978,14 +1032,14 @@ sub sim_player_always_wins {
                   map { $sim_tournament_players->[$_]->{index} => $_ }
                   0 .. scalar(@$sim_tournament_players) - 1;
                 my $pairings = factor_pair_minus_player(
-                    $sim_tournament_players,         $remaining_rounds,
-                    $player_in_nth_rank_index_index, \%player_index_to_rank
+                    $sim_tournament_players, $remaining_rounds,
+                    $player_in_nth_index,    \%player_index_to_rank
                 );
                 play_round( $pairings, $sim_tournament_players,
-                    $player_index_to_rank{$player_in_nth_rank_index_index} );
+                    $player_index_to_rank{$player_in_nth_index} );
 
                 if ( $sim_tournament_players->[0]->{index} ==
-                    $player_in_nth_rank_index_index )
+                    $player_in_nth_index )
                 {
                     $pwf_wins++;
                     last;
@@ -1010,10 +1064,10 @@ sub sim_player_always_wins {
                 my $pairings =
                   factor_pair( $sim_tournament_players, $remaining_rounds );
                 play_round( $pairings, $sim_tournament_players,
-                    $player_index_to_rank{$player_in_nth_rank_index_index} );
+                    $player_index_to_rank{$player_in_nth_index} );
 
                 if ( $sim_tournament_players->[0]->{index} ==
-                    $player_in_nth_rank_index_index )
+                    $player_in_nth_index )
                 {
                     $fp_wins++;
                     last;
@@ -1087,6 +1141,12 @@ sub create_times_played_key {
 sub factor_pair {
     my ( $sim_tournament_players, $nrl ) = @_;
 
+    my $number_of_players = scalar(@$sim_tournament_players);
+
+    if ( $nrl > $number_of_players / 2 ) {
+        $nrl = $number_of_players / 2;
+    }
+
     # This assumes players are already sorted
     my @pairings;
     for ( my $i = 0 ; $i < $nrl ; $i++ ) {
@@ -1142,8 +1202,11 @@ sub factor_pair_minus_player {
 sub sort_tournament_players_by_record {
     my $tournament_players = shift;
     @{$tournament_players} =
-      sort { $b->{wins} <=> $a->{wins} || $b->{spread} <=> $a->{spread} }
-      @{$tournament_players};
+      sort {
+             $a->{is_bye} <=> $b->{is_bye}
+          || $b->{wins} <=> $a->{wins}
+          || $b->{spread} <=> $a->{spread}
+      } @{$tournament_players};
 }
 
 sub sort_tournament_players_by_index {
@@ -1245,6 +1308,10 @@ sub tournament_players_string {
     my $tournament_players = shift;
     my $result             = '';
     for ( my $i = 0 ; $i < @$tournament_players ; $i++ ) {
+        my $tournament_player = $tournament_players->[$i];
+        if ( $tournament_player->{is_bye} ) {
+            next;
+        }
         $result .= player_string( $tournament_players->[$i], $i ) . "\n";
     }
     return $result;

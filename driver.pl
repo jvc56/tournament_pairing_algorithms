@@ -12,6 +12,10 @@ require "./COP.pm";
 
 # Parsing the t file
 
+use constant LOG_DIRECTORY       => 'logs';
+use constant TEST_DATA_DIRECTORY => 'test_data';
+use constant TSH_CONFIG_FILENAME => 'config.tsh';
+
 sub players_scores_from_tfile {
     my ( $tfile, $start_round ) = @_;
     unless ( -e $tfile ) {
@@ -216,166 +220,178 @@ sub create_cop_config_and_get_pairings {
 }
 
 sub get_all_test_directories {
-  my $dir = 'tourney_test_data';
-  opendir(my $dh, $dir) || die "Can't open directory $dir: $!";
-  my @files = readdir($dh);
-  closedir($dh);
+    my $dir = TEST_DATA_DIRECTORY;
+    opendir( my $dh, $dir ) || die "Can't open directory $dir: $!";
+    my @files = readdir($dh);
+    closedir($dh);
 
-  my @file_paths;
-  foreach my $file (@files) {
-    next if $file =~ /^\./; # Skip hidden files
-    my $file_path = "$dir/$file";
-    push @file_paths, $file_path;
-  }
+    my @file_paths;
+    foreach my $file (@files) {
+        next if $file =~ /^\./;    # Skip hidden files
+        my $file_path = "$dir/$file";
+        push @file_paths, $file_path;
+    }
 
-  return \@file_paths;
+    return \@file_paths;
 }
 
 sub get_t_files {
-  my ($dir_name) = @_;
-  opendir(my $dh, $dir_name) || die "Can't open directory $dir_name: $!";
-  my @files = readdir($dh);
-  closedir($dh);
+    my ($dir_name) = @_;
+    opendir( my $dh, $dir_name ) || die "Can't open directory $dir_name: $!";
+    my @files = readdir($dh);
+    closedir($dh);
 
-  my @t_files;
-  foreach my $file (@files) {
-    next if $file =~ /^\./; # Skip hidden files
-    my $file_path = "$dir_name/$file";
-    if (-f $file_path && $file =~ /\.t$/) {
-      push @t_files, $file_path;
+    my @t_files;
+    foreach my $file (@files) {
+        next if $file =~ /^\./;    # Skip hidden files
+        my $file_path = "$dir_name/$file";
+        if ( -f $file_path && $file =~ /\.t$/ ) {
+            push @t_files, $file_path;
+        }
     }
-  }
 
-  return \@t_files;
+    return \@t_files;
 }
 
 sub get_tsh_config_info {
-  my ($filename) = @_;
-  open(my $fh, '<', $filename) || die "Can't open file $filename: $!";
+    my ($filename) = @_;
+    open( my $fh, '<', $filename ) || die "Can't open file $filename: $!";
 
-  my $max_rounds;
-  my %lowest_ranked_payouts = ();
-  while (my $line = <$fh>) {
-    chomp $line;
-    if ($line =~ /^config\s+max_rounds\s+=\s+(\d+)/) {
-      $max_rounds = $1;
-    } elsif (!($line =~ /class/) && $line =~ /^prize\s+rank\s+(\d+)\s+(\w+)/) {
-        my $rank = $1;
-        my $division = uc($2);
-        my $number_of_times_played = 0;
-        if ( !exists $lowest_ranked_payouts{$division} || ($lowest_ranked_payouts{$division} < $rank) ) {
-            $lowest_ranked_payouts{$division} = $rank;
+    my $final_round;
+    my %lowest_ranked_payouts = ();
+    while ( my $line = <$fh> ) {
+        chomp $line;
+        if ( $line =~ /^config\s+max_rounds\s+=\s+(\d+)/ ) {
+            $final_round = $1;
+        }
+        elsif ( !( $line =~ /class/ )
+            && $line =~ /^prize\s+rank\s+(\d+)\s+(\w+)/ )
+        {
+            my $rank                   = $1;
+            my $division               = uc($2);
+            my $number_of_times_played = 0;
+            if ( !exists $lowest_ranked_payouts{$division}
+                || ( $lowest_ranked_payouts{$division} < $rank ) )
+            {
+                $lowest_ranked_payouts{$division} = $rank;
+            }
         }
     }
-  }
 
-  close $fh;
+    close $fh;
 
-  return \%lowest_ranked_payouts, $max_rounds;
+    return \%lowest_ranked_payouts, $final_round;
 }
 
+sub get_filename_directory_and_rest_of_path {
+    my ($filepath) = @_;
+
+    my @split_filepath = split( '/', $filepath );
+    my $filename       = $split_filepath[-1];
+    my $directory      = $split_filepath[-2];
+    pop @split_filepath;
+    pop @split_filepath;
+    my $rest_of_path = join( '/', @split_filepath );
+    return $filename, $directory, $rest_of_path;
+}
+
+sub get_tsh_config_info_and_log_filename {
+    my ( $t_file, $start_round ) = @_;
+
+    my ( $t_file_basename, $t_file_directory, $rest_of_path ) =
+      get_filename_directory_and_rest_of_path($t_file);
+
+    my ( $lowest_ranked_payouts, $final_round ) = get_tsh_config_info(
+        join( '/', $rest_of_path, $t_file_directory, TSH_CONFIG_FILENAME ) );
+
+    my $log_file_prefix = $t_file_directory . '.' . $t_file_basename;
+    my $division_name =
+      uc( substr( $t_file_basename, 0, length($t_file_basename) - 2 ) );
+    my $lowest_ranked_payout = $lowest_ranked_payouts->{$division_name};
+
+    return $final_round, $lowest_ranked_payout,
+      LOG_DIRECTORY . '/' . $log_file_prefix . '.' . $start_round . '.log';
+}
+
+sub get_config_for_t_file_round {
+    my ( $t_file, $start_round ) = @_;
+
+    my ( $final_round, $lowest_ranked_payout, $log_filename ) =
+      get_tsh_config_info_and_log_filename( $t_file, $start_round );
+
+    return create_cop_config(
+        $start_round, $final_round,
+        1_000,        1_000,
+        $lowest_ranked_payout, [ 300, 250, 200 ],
+        [0.15], [ 0, 0.1, 0.05, 0.01 ],
+        $log_filename
+    );
+}
+
+sub test_t_file_for_start_round {
+    my ( $t_file, $start_round ) = @_;
+
+    my $cop_config = get_config_for_t_file_round( $t_file, $start_round );
+
+    printf( "Logging to %s\n", $cop_config->{log_filename} );
+    my ( $tournament_players, $times_played_hash ) =
+      tournament_players_from_tfile( $t_file, $start_round );
+    cop( $cop_config, $tournament_players, $times_played_hash );
+}
+
+sub test_t_file_for_all_rounds {
+    my ( $t_file, $final_round ) = @_;
+    for ( my $i = 0 ; $i < $final_round ; $i++ ) {
+        test_t_file_for_start_round( $t_file, $i );
+    }
+}
 
 sub test_cop {
     my $test_directories = get_all_test_directories();
 
-    for (my $i = 0; $i < scalar @{$test_directories}; $i++) {
+    for ( my $i = 0 ; $i < scalar @{$test_directories} ; $i++ ) {
         my $test_directory = $test_directories->[$i];
-        print("$test_directory\n\n" . Dumper(get_t_files($test_directory)));
-        my $config_file = $test_directory . "/config.tsh";
-        print(Dumper(get_tsh_config_info($config_file)));
-    }    
+
+        my ( $lowest_ranked_payouts, $final_round ) = get_tsh_config_info(
+            join( '/', $test_directory, TSH_CONFIG_FILENAME ) );
+
+        my $t_files = get_t_files($test_directory);
+        for ( my $j = 0 ; $j < scalar @{$t_files} ; $j++ ) {
+            test_t_file_for_all_rounds( $t_files->[$j], $final_round );
+        }
+    }
 }
 
 sub main {
 
-    my $payout = 1;
-    my $start  = 1;
+    my $payout = -1;
+    my $start  = -1;
     my $final;
-    my $tfile;
+    my $t_file;
     my $url;
-    my $sim  = 100000;
-    my $test = 0;
+    my $sim     = 100000;
+    my $testall = 0;
 
     GetOptions(
-        "payout=s" => \$payout,
-        "start=s"  => \$start,
-        "final=s"  => \$final,
-        "tfile=s"  => \$tfile,
-        "url=s"    => \$url,
-        "sim=s"    => \$sim,
-        "test"     => \$test
+        "start=s" => \$start,
+        "tfile=s" => \$t_file,
+        "testall" => \$testall
     );
 
-    if ($test) {
+    mkdir LOG_DIRECTORY;
+
+    if ($testall) {
         test_cop();
-        return;
     }
-
-    if ( !$final ) {
-        print "required: final\n";
-        exit(-1);
+    elsif ( $start >= 0 && $t_file ) {
+        test_t_file_for_start_round( $t_file, $start );
     }
-
-    if ( ( !$tfile && !$url ) || ( $tfile && $url ) ) {
-        print "required: exactly one of: tfile, url\n";
-        exit(-1);
+    else {
+        print(
+"use --start and --tfile to test a single file or --testall to test everything\n"
+        );
+        exit(1);
     }
-
-    my $filename = "a.t";
-
-    if ($tfile) {
-        print "Reading from $tfile\n";
-        $filename = $tfile;
-    }
-
-    if ($url) {
-        print "Downloading $url to $filename\n";
-        getstore( $url, $filename );
-    }
-
-    my $number_of_sims = 100000;
-
-    if ($sim) {
-        $number_of_sims = int($sim);
-    }
-
-    my $lowest_ranked_payout = 0;
-
-    if ($payout) {
-        $lowest_ranked_payout = int($payout);
-    }
-
-    my ( $tournament_players, $times_played_hash ) =
-      tournament_players_from_tfile( $filename, $start );
-
-    my $log_dir = "./cop_logs/";
-
-    mkdir $log_dir;
-
-    if ( !-e $log_dir ) {
-        die "$log_dir does not exist";
-    }
-
-    my $timestamp = localtime();
-    $timestamp =~ s/[\s\:]/_/g;
-
-    my $log_filename = "$log_dir$timestamp" . "_div_somediv_round_$start.log";
-
-    my $config = create_cop_config(
-        $start,
-        $final,
-        $number_of_sims,
-        10_000,
-        $lowest_ranked_payout,
-        [ 250, 200, 200 ],
-        [0.15],
-        [ 0, 0.0025, 0.01, 0.05, 0.1 ],
-        "$log_dir$timestamp" . "_div_somediv_round_$start.log"
-    );
-
-    log_info( $config, Dumper($config) );
-
-    cop( $config, $tournament_players, $times_played_hash );
 }
 
 main();

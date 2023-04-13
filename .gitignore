@@ -2,3 +2,5 @@
 cop_logs
 *test_data*
 *nyt*
+logs
+stdout

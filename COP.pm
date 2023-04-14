@@ -164,6 +164,7 @@ sub Run ($$@) {
         lowest_ranked_payout       => $lowest_ranked_payout,
         cumulative_gibson_spreads =>
           get_cumulative_gibson_spreads( $gibson_spread, $max_round ),
+          gibson_spreads => extend_tsh_config_array($gibson_spread, $max_round),
         hopefulness => extend_tsh_config_array( $hopefulness, $max_round ),
     };
 
@@ -186,8 +187,7 @@ sub Run ($$@) {
             $times_played{$times_played_key} = $number_of_times_played;
         }
 
-        # For COP we treat the bye index as -1
-        my $times_given_bye_key = create_times_played_key( $player_index, -1 );
+        my $times_given_bye_key = create_times_played_key( $player_index, $number_of_players );
 
         # Count the byes by up to the based on round
         # (There does not seem to be an existing Player method for this)
@@ -225,6 +225,12 @@ sub Run ($$@) {
         # Convert back to 1-indexed
         my $player_id   = $i + 1;
         my $opponent_id = $pairings->[$i] + 1;
+
+        if ($opponent_id > $number_of_players) {
+            # This is a bye
+            $opponent_id = 0;
+        }
+
         if ( $player_id > $opponent_id && $opponent_id != 0 ) {
 
             # We have already made this pairing
@@ -355,11 +361,11 @@ sub reset_tournament_player {
 }
 
 sub add_bye_player {
-    my ($tournament_players) = @_;
+    my ($tournament_players, $bye_player_index) = @_;
 
     # This display index can be the same as the original index
     push @{$tournament_players},
-      new_tournament_player( 'BYE', -1, -1, 0, 0, 1 );
+      new_tournament_player( 'BYE', $bye_player_index, $bye_player_index, 0, 0, 1 );
 }
 
 # Extract lowest payout rank
@@ -455,7 +461,7 @@ sub cop {
     my $number_of_players = scalar(@$tournament_players);
 
     if ( $number_of_players % 2 == 1 ) {
-        add_bye_player($tournament_players);
+        add_bye_player($tournament_players, $number_of_players);
         $number_of_players = scalar(@$tournament_players);
     }
 
@@ -969,7 +975,8 @@ sub sim_factor_pair {
         {
             my $pairings =
               factor_pair( $sim_tournament_players, $remaining_rounds );
-            play_round( $pairings, $sim_tournament_players, -1 );
+            my $max_spread = $config->{gibson_spreads}->[-$remaining_rounds];
+            play_round( $pairings, $sim_tournament_players, -1, $max_spread );
         }
         record_tournament_results( $results, $sim_tournament_players );
 
@@ -1035,8 +1042,9 @@ sub sim_player_always_wins {
                     $sim_tournament_players, $remaining_rounds,
                     $player_in_nth_index,    \%player_index_to_rank
                 );
+                my $max_spread = $config->{gibson_spreads}->[-$remaining_rounds];
                 play_round( $pairings, $sim_tournament_players,
-                    $player_index_to_rank{$player_in_nth_index} );
+                    $player_index_to_rank{$player_in_nth_index}, $max_spread );
 
                 if ( $sim_tournament_players->[0]->{index} ==
                     $player_in_nth_index )
@@ -1063,8 +1071,9 @@ sub sim_player_always_wins {
                   0 .. scalar(@$sim_tournament_players) - 1;
                 my $pairings =
                   factor_pair( $sim_tournament_players, $remaining_rounds );
+                my $max_spread = $config->{gibson_spreads}->[-$remaining_rounds];
                 play_round( $pairings, $sim_tournament_players,
-                    $player_index_to_rank{$player_in_nth_index} );
+                    $player_index_to_rank{$player_in_nth_index}, $max_spread );
 
                 if ( $sim_tournament_players->[0]->{index} ==
                     $player_in_nth_index )
@@ -1088,7 +1097,7 @@ sub sim_player_always_wins {
 }
 
 sub play_round {
-    my ( $pairings, $tournament_players, $forced_win_player ) = @_;
+    my ( $pairings, $tournament_players, $forced_win_player, $max_spread ) = @_;
 
   outer: for ( my $i = 0 ; $i < scalar @$pairings ; $i++ ) {
         my $pairing = $pairings->[$i];
@@ -1101,7 +1110,7 @@ sub play_round {
                 next outer;
             }
         }
-        my $spread = 200 - int( rand(401) );
+        my $spread = int($max_spread / 2) - int( rand($max_spread + 1) );
         if ( $forced_win_player >= 0 ) {
             if ( $pairing->[0] == $forced_win_player ) {
                 $spread = abs($spread) + 1;
@@ -1312,7 +1321,7 @@ sub tournament_players_string {
         if ( $tournament_player->{is_bye} ) {
             next;
         }
-        $result .= player_string( $tournament_players->[$i], $i ) . "\n";
+        $result .= player_string( $tournament_player, $i ) . "\n";
     }
     return $result;
 }
@@ -1335,13 +1344,13 @@ sub pairings_string {
     {
         my $player         = $tournament_players->[$player_index];
         my $opponent_index = $pairings->[$player_index];
-        if ( $player_index > $opponent_index && $opponent_index >= 0 ) {
+        if ( $player_index > $opponent_index ) {
             next;
         }
         my $number_of_times_played =
           get_number_of_times_played( $player_index, $opponent_index,
             $times_played_hash );
-        if ( $opponent_index == -1 ) {
+        if ( $opponent_index == $number_of_players ) {
             $result .= sprintf(
                 "%s has a bye (%d)\n",
                 player_string( $player, -1 ),

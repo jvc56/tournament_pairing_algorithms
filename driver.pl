@@ -99,6 +99,12 @@ sub tournament_players_from_players_scores {
         for ( my $round = 0 ; $round < $player_number_of_scores ; $round++ ) {
             my $opponent_index = $pscores->{opponent_indexes}[$round];
 
+            my $is_bye = 0;
+            if ($opponent_index < 0) {
+                $opponent_index = $number_of_players;
+                $is_bye = 1;
+            }
+
             my $times_played_key =
               create_times_played_key( $player_index, $opponent_index );
 
@@ -111,9 +117,7 @@ sub tournament_players_from_players_scores {
 
             my $opponent_score = 0;
 
-            # Byes have already been converted from 0 to -1
-            # when reading from the t file.
-            if ( $opponent_index == -1 ) {
+            if ( $is_bye ) {
 
                 # Account for the bye "pairing" only
                 # occurring once since the bye is not a real player.
@@ -166,7 +170,7 @@ sub create_cop_config {
     my (
         $start_round,             $final_round,
         $number_of_sims,          $always_wins_number_of_sims,
-        $lowest_ranked_payout,    $gibson_spreads,
+        $lowest_ranked_payout,    $gibson_spread,
         $control_loss_thresholds, $hopefulness,
         $log_filename
     ) = @_;
@@ -178,7 +182,8 @@ sub create_cop_config {
         number_of_rounds_remaining => $final_round - $start_round,
         lowest_ranked_payout       => $lowest_ranked_payout,
         cumulative_gibson_spreads =>
-          get_cumulative_gibson_spreads( $gibson_spreads, $final_round - 1 ),
+          get_cumulative_gibson_spreads( $gibson_spread, $final_round - 1 ),
+        gibson_spreads => extend_tsh_config_array($gibson_spread, $final_round - 1),
         control_loss_thresholds =>
           extend_tsh_config_array( $control_loss_thresholds, $final_round - 1 ),
         hopefulness =>
@@ -339,10 +344,77 @@ sub test_t_file_for_start_round {
     cop( $cop_config, $tournament_players, $times_played_hash );
 }
 
+sub test_t_file_for_autoplay_round {
+    my ( $t_file, $start_round, $tournament_players, $times_played_hash ) = @_;
+
+    my $cop_config = get_config_for_t_file_round( $t_file, $start_round );
+    $cop_config->{log_filename} .= '.autoplay';
+    printf( "Logging to %s\n", $cop_config->{log_filename} );
+
+    return cop( $cop_config, $tournament_players, $times_played_hash ), $cop_config;
+}
+
+sub test_t_file_play_round {
+    my ( $pairings, $tournament_players, $times_played_hash, $max_spread ) = @_;
+    # modify tournament players and times_played_hash
+    # convert to index pairs
+
+    # We must add a bye player for the play_round subroutine to work
+    my $number_of_players = scalar @{$tournament_players};
+    if ( $number_of_players % 2 == 1 ) {
+        add_bye_player($tournament_players, $number_of_players);
+        $number_of_players = scalar {@$tournament_players};
+    }
+
+    sort_tournament_players_by_record($tournament_players);
+    my %index_to_rank = ();
+    for (my $i = 0; $i < scalar @{$tournament_players}; $i++) {
+        $index_to_rank{$tournament_players->[$i]->{index}} = $i;
+    }
+    sort_tournament_players_by_index($tournament_players);
+
+    my @index_pairs = ();
+    for (my $i = 0; $i < scalar @{$pairings}; $i++) {
+        my $j = $pairings->[$i];
+        if ($i < $j || $j == -1) {
+            my $player_i_index = $i;
+            my $player_j_index = $number_of_players - 1;
+            if ($j != -1) {
+                $player_j_index = $j;
+            }
+
+            # Update the times played hash here
+            my $times_played_key = create_times_played_key($player_i_index, $player_j_index);
+
+            if ( exists $times_played_hash->{$times_played_key} ) {
+                $times_played_hash->{$times_played_key}++;
+            } else {
+                $times_played_hash->{$times_played_key} = 1;
+            }
+
+            push @index_pairs, [$player_i_index, $player_j_index];
+        }
+    }
+    play_round(\@index_pairs, $tournament_players, -1, $max_spread);
+}
+
+sub test_t_file_autoplay {
+    my ( $t_file, $final_round ) = @_;
+
+    my ( $tournament_players, $times_played_hash ) =
+      tournament_players_from_tfile( $t_file, 0 );
+    
+    for ( my $round = 0 ; $round < $final_round ; $round++ ) {
+        my ($pairings, $cop_config) = test_t_file_for_autoplay_round($t_file, $round, $tournament_players, $times_played_hash);
+        my $max_spread = $cop_config->{gibson_spreads}->[$round];
+        test_t_file_play_round($pairings, $tournament_players, $times_played_hash, $max_spread);
+    }
+}
+
 sub test_t_file_for_all_rounds {
     my ( $t_file, $final_round ) = @_;
-    for ( my $i = 0 ; $i < $final_round ; $i++ ) {
-        test_t_file_for_start_round( $t_file, $i );
+    for ( my $round = 0 ; $round < $final_round ; $round++ ) {
+        test_t_file_for_start_round( $t_file, $round );
     }
 }
 
@@ -358,6 +430,7 @@ sub test_cop {
         my $t_files = get_t_files($test_directory);
         for ( my $j = 0 ; $j < scalar @{$t_files} ; $j++ ) {
             test_t_file_for_all_rounds( $t_files->[$j], $final_round );
+            test_t_file_autoplay( $t_files->[$j], $final_round );
         }
     }
 }

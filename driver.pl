@@ -27,19 +27,29 @@ sub players_scores_from_tfile {
     open( my $fh, '<', $tfile ) or die "Could not open file '$tfile': $!";
     while ( my $line = <$fh> ) {
         chomp($line);
-        my ( $last_name, $first_name, $opponent_indexes_string, $scores_string )
-          = ( $line =~ /^([^,]+),(\D+)\d+([^;]+);([^;]+)/ );
-        unless ( $last_name
-            && $first_name
+        my ( $name, $opponent_indexes_string, $scores_string )
+          = ( $line =~ /^(\D+)\d+([^;]+);([^;]+)/ );
+        unless ( $name
             && $opponent_indexes_string
             && $scores_string )
         {
-            print "match not found for $line\n";
-            exit(-1);
+            return "match not found (>$name< >$opponent_indexes_string< >$scores_string<) for\n>$line<\n";
         }
 
-        $first_name              =~ s/^\s+|\s+$//g;
-        $last_name               =~ s/^\s+|\s+$//g;
+        my $full_name = $name;
+        if (index($name, ",") != -1) {
+            my @first_name_and_last_name = split(',', $name);
+            if (scalar @first_name_and_last_name != 2) {
+                return "invalid name part for $line\n";
+            }
+            my $first_name = $first_name_and_last_name[1];
+            my $last_name = $first_name_and_last_name[0];
+            $first_name              =~ s/^\s+|\s+$//g;
+            $last_name               =~ s/^\s+|\s+$//g;
+            $full_name = $first_name . " " . $last_name;
+        }
+
+        $full_name               =~ s/^\s+|\s+$//g;
         $opponent_indexes_string =~ s/^\s+|\s+$//g;
         $scores_string           =~ s/^\s+|\s+$//g;
 
@@ -60,10 +70,8 @@ sub players_scores_from_tfile {
         splice( @scores,           $start_round );
         splice( @opponent_indexes, $start_round );
 
-        my $name = $first_name . " " . $last_name;
-
         push @players_scores,
-          new_player_scores( $name, $index, \@opponent_indexes, \@scores );
+          new_player_scores( $full_name, $index, \@opponent_indexes, \@scores );
         $index++;
     }
     close($fh);

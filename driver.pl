@@ -454,7 +454,7 @@ sub test_t_file_play_round {
 }
 
 sub test_t_file_autoplay {
-    my ( $t_file, $final_round, $start_round ) = @_;
+    my ( $t_file, $start_round ) = @_;
 
     my ( $tournament_players, $times_played_hash, $previous_pairing_hash ) =
       tournament_players_from_tfile( $t_file, $start_round );
@@ -463,6 +463,8 @@ sub test_t_file_autoplay {
         print($tournament_players);
         return;
     }
+
+    my ($final_round, undef, undef) = get_tsh_config_info_and_log_filename($t_file, $start_round);
 
     for ( my $round = $start_round ; $round < $final_round ; $round++ ) {
         my ($pairings, $cop_config) = test_t_file_for_autoplay_round($t_file, $round, $tournament_players, $times_played_hash);
@@ -498,7 +500,7 @@ sub test_cop {
         my $t_files = get_t_files($test_directory);
         for ( my $j = 0 ; $j < scalar @{$t_files} ; $j++ ) {
             test_t_file_for_all_rounds( $t_files->[$j], $final_round );
-            test_t_file_autoplay( $t_files->[$j], $final_round, 0 );
+            test_t_file_autoplay( $t_files->[$j], 0 );
         }
     }
 }
@@ -527,7 +529,7 @@ sub main {
     if ($testall) {
         test_cop();
     } elsif ($auto && $start >= 0 && $t_file) {
-        test_t_file_autoplay( $t_file, $final, $start );
+        test_t_file_autoplay( $t_file, $start );
     } elsif ( $start >= 0 && $t_file ) {
         test_t_file_for_start_round( $t_file, $start );
     }

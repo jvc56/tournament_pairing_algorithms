@@ -95,7 +95,7 @@ sub Run ($$@) {
 
     if ( !-e $log_dir ) {
         $tournament->TellUser( 'eapfail',
-            "failed to create directory %log_dir" );
+            "failed to create directory $log_dir" );
         return 0;
     }
 
@@ -157,6 +157,7 @@ sub Run ($$@) {
     my $cop_config = {
         log_filename               => $log_filename,
         number_of_sims             => $number_of_sims,
+        number_of_rounds           => $max_round,
         always_wins_number_of_sims => $always_wins_number_of_sims,
         control_loss_thresholds =>
           extend_tsh_config_array( $control_loss_thresholds, $max_round ),
@@ -169,7 +170,7 @@ sub Run ($$@) {
     };
 
     my %times_played = ();
-
+    my %previous_pairing_hash = ();
     # Iterate through the players in a division
     my @players            = $dp->Players();
     my $number_of_players  = scalar @players;
@@ -182,9 +183,22 @@ sub Run ($$@) {
             my $opponent_index = $opponent->ID() - 1;
             my $number_of_times_played =
               $player->CountRoundRepeats( $opponent, $sr0 );
+            my $number_of_times_played_excluding_last_round =
+              $player->CountRoundRepeats( $opponent, $sr0 - 1);
+
+            my $played_last_round = $number_of_times_played - $number_of_times_played_excluding_last_round;
+            if ($played_last_round > 1) {
+                $tournament->TellUser( 'eapfail',
+            sprintf("these players played more than once last round: %s and %s (%d)",
+             $player->PrettyName(), $opponent->PrettyName(), $played_last_round));
+                return 0;
+            }
             my $times_played_key =
               create_times_played_key( $player_index, $opponent_index );
             $times_played{$times_played_key} = $number_of_times_played;
+            if ($played_last_round == 1) {
+                $previous_pairing_hash{$times_played_key} = 1;
+            }
         }
 
         my $times_given_bye_key = create_times_played_key( $player_index, $number_of_players );
@@ -211,7 +225,7 @@ sub Run ($$@) {
         );
     }
 
-    my $pairings = cop( $cop_config, \@tournament_players, \%times_played );
+    my $pairings = cop( $cop_config, \@tournament_players, \%times_played, \%previous_pairing_hash );
 
     my $setupp = $this->SetupForPairings(
         'division' => $dp,
@@ -254,6 +268,7 @@ round as opposed to the provided based on round.
 =cut
 
 use constant PROHIBITIVE_WEIGHT => 1000000;
+use constant CONTROL_LOSS_ACTIVE => 0.5;
 
 sub log_info {
     my ( $config, $content ) = @_;
@@ -443,9 +458,11 @@ sub extend_tsh_config_array {
 # Pairing and simming
 
 sub cop {
-    my ( $config, $tournament_players, $times_played_hash ) = @_;
+    my ( $config, $tournament_players, $times_played_hash, $previous_pairing_hash ) = @_;
 
     log_info( $config, "\n\nCOP Config:\n\n" . Dumper($config) );
+
+    log_info( $config, "\n\nPrevious Pairing Hash:\n\n" . Dumper($previous_pairing_hash) );
 
     # Lowest ranked payout was given as 1-indexed
     # To keep this consistent with the rest of the 0-indexed
@@ -554,12 +571,27 @@ sub cop {
         )
     );
 
+    my $percentage_of_tournament_remaining = $config->{number_of_rounds_remaining} / $config->{number_of_rounds};
+    my $control_loss_active = $percentage_of_tournament_remaining < CONTROL_LOSS_ACTIVE;
+
+    my $control_status_text = 'ACTIVE';
+
+    if (!$control_loss_active) {
+        $control_status_text = 'DISABLED';
+    }
+
+    log_info(
+        $config,
+        sprintf("\n\nControl loss is %s with trigger of %f and %f of the tournament remaining\n\n", $control_status_text, CONTROL_LOSS_ACTIVE, $percentage_of_tournament_remaining)
+    );
+
+
     log_info(
         $config,
         sprintf(
 "\n\nWeights\n\n%-92s | %-3s = %7s = %7s + %7s + %7s + %7s + %7s + %7s\n",
             "Pairing", "Rpt",     "Total",  "Repeats", "RankDif",
-            "RankPr",  "Control", "Gibson", "KOTH"
+            "RankPla",  "Control", "Gibson", "KOTH"
         )
     );
 
@@ -567,12 +599,14 @@ sub cop {
     # using all of the tournament players since
     # everyone needs to be paired
 
+
     my $max_weight  = 0;
     my @edges       = ();
     my %weight_hash = ();
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player_i = $tournament_players->[$i];
         for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
+            my $both_cannot_get_payout = $i > $lowest_ranked_player_within_payout && $j > $lowest_ranked_player_within_payout;
             my $player_j = $tournament_players->[$j];
 
             my $number_of_times_played =
@@ -582,7 +616,20 @@ sub cop {
             my $repeat_weight = int( ( $number_of_times_played * 2 ) *
                   ( ( $number_of_players / 3 )**3 ) );
 
-            my $rank_difference_weight = ( $j - $i )**3;
+            my $times_played_key = create_times_played_key($player_i->{index}, $player_j->{index});
+            if ($both_cannot_get_payout && $previous_pairing_hash->{$times_played_key}) {
+                # If both players are out of the money avoid a back to back repeat
+                $repeat_weight += PROHIBITIVE_WEIGHT;
+            }
+
+            my $rank_difference_weight;
+            # If neither player can cash, rank difference weight
+            # should count for very little.
+            if ($both_cannot_get_payout) {
+                $rank_difference_weight = ( $j - $i );
+            } else {
+                $rank_difference_weight = ( $j - $i )**3;
+            }
 
             # Pair with payout placers weight
             my $pair_with_placer_weight = 0;
@@ -652,9 +699,17 @@ sub cop {
 
                     # Control loss weight
                     # Only applies to the player in first
-                    if (   $i == 0
-                        && $j > $lowest_ranked_always_wins
-                        && $control_loss > $adjusted_control_loss_threshold )
+
+                    # If:
+                    #  Control loss is active for this part of the tournament, and
+                    #  We are considering the player in first, and
+                    #  the control loss meets the threshold, and
+                    #  the opponent is lower ranked than the minimum of:
+                    #    the person who can get first in the sims and
+                    #    the lowest ranked always winning person
+                    if (  $control_loss_active && $i == 0
+                        && $control_loss > $adjusted_control_loss_threshold &&
+                        $j > min($lowest_ranked_placers->[$i], $lowest_ranked_always_wins))
                     {
                         $control_loss_weight = PROHIBITIVE_WEIGHT;
                     }
@@ -827,11 +882,11 @@ sub get_control_loss {
       sim_player_always_wins( $config, $sim_tournament_players );
 
     my $lowest_ranked_always_wins = 0;
-    for ( my $i = 1 ; $i < $sim_number_of_players ; $i++ ) {
-        if ( $always_wins_pair_player_with_first->[ $i - 1 ] ==
+    for ( my $i = 0 ; $i < scalar @{$always_wins_pair_player_with_first} ; $i++ ) {
+        if ( $always_wins_pair_player_with_first->[ $i ] ==
             $config->{always_wins_number_of_sims} )
         {
-            $lowest_ranked_always_wins = $i;
+            $lowest_ranked_always_wins = $i + 1;
         }
         else {
             last;
@@ -1367,6 +1422,14 @@ sub pairings_string {
         }
     }
     return $result;
+}
+
+sub min {
+    my ($x, $y) = @_;
+    if ($x < $y) {
+        return $x;
+    }
+    return $y;
 }
 
 1;

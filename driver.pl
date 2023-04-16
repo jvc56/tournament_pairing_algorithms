@@ -82,6 +82,7 @@ sub tournament_players_from_players_scores {
     my ($players_scores) = @_;
     my @tournament_players;
     my %times_played_hash;
+    my %previous_pairing_hash;
     my $number_of_scores_per_player = -1;
     my $number_of_players           = scalar @{$players_scores};
     for (
@@ -119,6 +120,10 @@ sub tournament_players_from_players_scores {
             }
             else {
                 $times_played_hash{$times_played_key} = 1;
+            }
+
+            if ($round == $player_number_of_scores - 1) {
+                $previous_pairing_hash{$times_played_key} = 1;
             }
 
             my $opponent_score = 0;
@@ -161,7 +166,7 @@ sub tournament_players_from_players_scores {
 
     sort_tournament_players_by_record( \@tournament_players );
 
-    return ( \@tournament_players, \%times_played_hash );
+    return ( \@tournament_players, \%times_played_hash, \%previous_pairing_hash );
 }
 
 sub tournament_players_from_tfile {
@@ -170,9 +175,9 @@ sub tournament_players_from_tfile {
     if (ref($players_scores) ne 'ARRAY') {
         return $players_scores;
     }
-    my ( $tournament_players, $times_played_hash ) =
+    my ( $tournament_players, $times_played_hash, $previous_pairing_hash ) =
       tournament_players_from_players_scores($players_scores);
-    return ( $tournament_players, $times_played_hash );
+    return ( $tournament_players, $times_played_hash, $previous_pairing_hash );
 }
 
 sub create_cop_config {
@@ -187,6 +192,7 @@ sub create_cop_config {
     return {
         log_filename               => $log_filename,
         number_of_sims             => $number_of_sims,
+        number_of_rounds => $final_round,
         always_wins_number_of_sims => $always_wins_number_of_sims,
         number_of_rounds_remaining => $final_round - $start_round,
         lowest_ranked_payout       => $lowest_ranked_payout,
@@ -203,14 +209,14 @@ sub create_cop_config {
 sub get_pairings {
     my ( $filename, $config, $start_round ) = @_;
 
-    my ( $tournament_players, $times_played_hash ) =
+    my ( $tournament_players, $times_played_hash, $previous_pairing_hash ) =
       tournament_players_from_tfile( $filename, $start_round );
 
     if (! defined $times_played_hash) {
         return $tournament_players;
     }
 
-    return cop( $config, $tournament_players, $times_played_hash );
+    return cop( $config, $tournament_players, $times_played_hash, $previous_pairing_hash );
 }
 
 sub create_cop_config_and_get_pairings {
@@ -231,14 +237,14 @@ sub create_cop_config_and_get_pairings {
         $log_filename
     );
 
-    my ( $tournament_players, $times_played_hash ) =
+    my ( $tournament_players, $times_played_hash, $previous_pairing_hash ) =
       tournament_players_from_tfile( $filename, $start_round );
 
     if (! defined $times_played_hash) {
         return $tournament_players;
     }
 
-    return cop( $config, $tournament_players, $times_played_hash );
+    return cop( $config, $tournament_players, $times_played_hash, $previous_pairing_hash );
 }
 
 sub get_all_test_directories {
@@ -277,7 +283,7 @@ sub get_t_files {
 
 sub get_tsh_config_info {
     my ($filename) = @_;
-    open( my $fh, '<', $filename ) || die "Can't open file $filename: $!";
+    open( my $fh, '<', $filename ) || return "Can't open file $filename: $!";
 
     my $final_round;
     my %lowest_ranked_payouts = ();
@@ -326,6 +332,10 @@ sub get_tsh_config_info_and_log_filename {
     my ( $lowest_ranked_payouts, $final_round ) = get_tsh_config_info(
         join( '/', $rest_of_path, $t_file_directory, TSH_CONFIG_FILENAME ) );
 
+    if (!defined $final_round) {
+        return $lowest_ranked_payouts;
+    }
+
     my $log_file_prefix = $t_file_directory . '.' . $t_file_basename;
     my $division_name =
       uc( substr( $t_file_basename, 0, length($t_file_basename) - 2 ) );
@@ -353,7 +363,7 @@ sub get_config_for_t_file_round {
         $start_round, $final_round,
         1_000,        1_000,
         $lowest_ranked_payout, [ 300, 250, 200 ],
-        [0.15], [ 0, 0.1, 0.05, 0.01 ],
+        [0.05], [ 0, 0.1, 0.05, 0.01 ],
         $log_filename
     );
 }
@@ -369,12 +379,12 @@ sub test_t_file_for_start_round {
     }
 
     printf( "Logging to %s\n", $cop_config->{log_filename} );
-    my ( $tournament_players, $times_played_hash ) =
+    my ( $tournament_players, $times_played_hash, $previous_pairing_hash ) =
       tournament_players_from_tfile( $t_file, $start_round );
     if (! defined $times_played_hash) {
         print($tournament_players);
     } else {
-        cop( $cop_config, $tournament_players, $times_played_hash );
+        cop( $cop_config, $tournament_players, $times_played_hash, $previous_pairing_hash );
     }
 }
 
@@ -393,7 +403,7 @@ sub test_t_file_for_autoplay_round {
 }
 
 sub test_t_file_play_round {
-    my ( $pairings, $tournament_players, $times_played_hash, $max_spread ) = @_;
+    my ( $pairings, $tournament_players, $times_played_hash, $previous_pairing_hash, $max_spread ) = @_;
     # modify tournament players and times_played_hash
     # convert to index pairs
 
@@ -410,6 +420,11 @@ sub test_t_file_play_round {
         $index_to_rank{$tournament_players->[$i]->{index}} = $i;
     }
     sort_tournament_players_by_index($tournament_players);
+
+    # Reset the previous pairing hash
+    foreach my $key (keys %{$previous_pairing_hash}) {
+        delete $previous_pairing_hash->{$key};
+    }
 
     my @index_pairs = ();
     for (my $i = 0; $i < scalar @{$pairings}; $i++) {
@@ -430,6 +445,8 @@ sub test_t_file_play_round {
                 $times_played_hash->{$times_played_key} = 1;
             }
 
+            $previous_pairing_hash->{$times_played_key} = 1;
+
             push @index_pairs, [$player_i_index, $player_j_index];
         }
     }
@@ -437,24 +454,24 @@ sub test_t_file_play_round {
 }
 
 sub test_t_file_autoplay {
-    my ( $t_file, $final_round ) = @_;
+    my ( $t_file, $final_round, $start_round ) = @_;
 
-    my ( $tournament_players, $times_played_hash ) =
-      tournament_players_from_tfile( $t_file, 0 );
+    my ( $tournament_players, $times_played_hash, $previous_pairing_hash ) =
+      tournament_players_from_tfile( $t_file, $start_round );
 
     if (! defined $times_played_hash) {
         print($tournament_players);
         return;
     }
 
-    for ( my $round = 0 ; $round < $final_round ; $round++ ) {
+    for ( my $round = $start_round ; $round < $final_round ; $round++ ) {
         my ($pairings, $cop_config) = test_t_file_for_autoplay_round($t_file, $round, $tournament_players, $times_played_hash);
         if (!defined $cop_config) {
             print($pairings);
             return;
         }
         my $max_spread = $cop_config->{gibson_spreads}->[$round];
-        test_t_file_play_round($pairings, $tournament_players, $times_played_hash, $max_spread);
+        test_t_file_play_round($pairings, $tournament_players, $times_played_hash, $previous_pairing_hash, $max_spread);
     }
 }
 
@@ -474,10 +491,14 @@ sub test_cop {
         my ( $lowest_ranked_payouts, $final_round ) = get_tsh_config_info(
             join( '/', $test_directory, TSH_CONFIG_FILENAME ) );
 
+        if (!defined $final_round) {
+            return $lowest_ranked_payouts;
+        }
+
         my $t_files = get_t_files($test_directory);
         for ( my $j = 0 ; $j < scalar @{$t_files} ; $j++ ) {
             test_t_file_for_all_rounds( $t_files->[$j], $final_round );
-            test_t_file_autoplay( $t_files->[$j], $final_round );
+            test_t_file_autoplay( $t_files->[$j], $final_round, 0 );
         }
     }
 }
@@ -486,6 +507,7 @@ sub main {
 
     my $payout = -1;
     my $start  = -1;
+    my $auto;
     my $final;
     my $t_file;
     my $url;
@@ -494,16 +516,19 @@ sub main {
 
     GetOptions(
         "start=s" => \$start,
+        "final=s" => \$final,
         "tfile=s" => \$t_file,
-        "testall" => \$testall
+        "testall" => \$testall,
+        "auto"    => \$auto
     );
 
     mkdir LOG_DIRECTORY;
 
     if ($testall) {
         test_cop();
-    }
-    elsif ( $start >= 0 && $t_file ) {
+    } elsif ($auto && $start >= 0 && $t_file) {
+        test_t_file_autoplay( $t_file, $final, $start );
+    } elsif ( $start >= 0 && $t_file ) {
         test_t_file_for_start_round( $t_file, $start );
     }
     else {

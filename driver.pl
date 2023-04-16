@@ -82,7 +82,7 @@ sub tournament_players_from_players_scores {
     my ($players_scores) = @_;
     my @tournament_players;
     my %times_played_hash;
-    my %previous_pairing_hash;
+    my %previous_pairing_hash = ();
     my $number_of_scores_per_player = -1;
     my $number_of_players           = scalar @{$players_scores};
     for (
@@ -389,7 +389,7 @@ sub test_t_file_for_start_round {
 }
 
 sub test_t_file_for_autoplay_round {
-    my ( $t_file, $start_round, $tournament_players, $times_played_hash ) = @_;
+    my ( $t_file, $start_round, $tournament_players, $times_played_hash, $previous_pairing_hash ) = @_;
 
     my $cop_config = get_config_for_t_file_round( $t_file, $start_round );
     if (ref($cop_config) ne 'HASH') {
@@ -399,7 +399,7 @@ sub test_t_file_for_autoplay_round {
     $cop_config->{log_filename} .= '.autoplay';
     printf( "Logging to %s\n", $cop_config->{log_filename} );
 
-    return cop( $cop_config, $tournament_players, $times_played_hash ), $cop_config;
+    return cop( $cop_config, $tournament_players, $times_played_hash, $previous_pairing_hash ), $cop_config;
 }
 
 sub test_t_file_play_round {
@@ -466,14 +466,25 @@ sub test_t_file_autoplay {
 
     my ($final_round, undef, undef) = get_tsh_config_info_and_log_filename($t_file, $start_round);
 
+    my $repeats_started = 0;
     for ( my $round = $start_round ; $round < $final_round ; $round++ ) {
-        my ($pairings, $cop_config) = test_t_file_for_autoplay_round($t_file, $round, $tournament_players, $times_played_hash);
+        my ($pairings, $cop_config) = test_t_file_for_autoplay_round($t_file, $round, $tournament_players, $times_played_hash, $previous_pairing_hash);
         if (!defined $cop_config) {
             print($pairings);
             return;
         }
         my $max_spread = $cop_config->{gibson_spreads}->[$round];
         test_t_file_play_round($pairings, $tournament_players, $times_played_hash, $previous_pairing_hash, $max_spread);
+        
+        if (!$repeats_started) {
+            foreach my $key (keys %{$times_played_hash}) {
+                if ($times_played_hash->{$key} > 1) {
+                    printf("Repeats started in %s at round %d\n", $t_file, $round + 1);
+                    $repeats_started = 1;
+                    last;
+                }
+            }
+        }
     }
 }
 

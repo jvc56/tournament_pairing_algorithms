@@ -108,6 +108,10 @@ sub Run ($$@) {
 
     my $max_round = $dp->MaxRound0();
 
+    my $last_paired_round0 = $dp->LastPairedRound0();
+
+
+    printf("COP: last paired round is %d\n", $last_paired_round0);
     # Extract TSH config vars
 
     my $gibson_spread = $tournament->Config()->Value('gibson_spread');
@@ -182,9 +186,9 @@ sub Run ($$@) {
             my $opponent       = $players[$j];
             my $opponent_index = $opponent->ID() - 1;
             my $number_of_times_played =
-              $player->CountRoundRepeats( $opponent, $sr0 );
+              $player->CountRoundRepeats( $opponent, $last_paired_round0 );
             my $number_of_times_played_excluding_last_round =
-              $player->CountRoundRepeats( $opponent, $sr0 - 1);
+              $player->CountRoundRepeats( $opponent, $last_paired_round0 - 1);
 
             my $played_last_round = $number_of_times_played - $number_of_times_played_excluding_last_round;
             if ($played_last_round > 1) {
@@ -206,7 +210,7 @@ sub Run ($$@) {
         # Count the byes by up to the based on round
         # (There does not seem to be an existing Player method for this)
         my $byes = 0;
-        for ( my $round = 0 ; $round <= $sr0 ; $round++ ) {
+        for ( my $round = 0 ; $round <= $last_paired_round0 ; $round++ ) {
             my $opponent = $player->{pairings}->[$round];
             if ( ( defined $opponent ) && $opponent == 0 ) {
                 $byes++;

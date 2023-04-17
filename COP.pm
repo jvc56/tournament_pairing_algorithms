@@ -110,8 +110,6 @@ sub Run ($$@) {
 
     my $last_paired_round0 = $dp->LastPairedRound0();
 
-
-    printf("COP: last paired round is %d\n", $last_paired_round0);
     # Extract TSH config vars
 
     my $gibson_spread = $tournament->Config()->Value('gibson_spread');

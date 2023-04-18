@@ -270,7 +270,6 @@ round as opposed to the provided based on round.
 =cut
 
 use constant PROHIBITIVE_WEIGHT => 1000000;
-use constant CONTROL_LOSS_ACTIVE => 0.5;
 
 sub log_info {
     my ( $config, $content ) = @_;
@@ -587,8 +586,7 @@ sub cop {
         )
     );
 
-    my $percentage_of_tournament_remaining = $config->{number_of_rounds_remaining} / $config->{number_of_rounds};
-    my $control_loss_active = $percentage_of_tournament_remaining < CONTROL_LOSS_ACTIVE;
+    my $control_loss_active = $config->{number_of_rounds_remaining} <= 4;
 
     my $control_status_text = 'ACTIVE';
 
@@ -598,7 +596,7 @@ sub cop {
 
     log_info(
         $config,
-        sprintf("\n\nControl loss is %s with trigger of %f and %f of the tournament remaining\n\n", $control_status_text, CONTROL_LOSS_ACTIVE, $percentage_of_tournament_remaining)
+        sprintf("\n\nControl loss is %s\n\n", $control_status_text)
     );
 
 
@@ -623,7 +621,8 @@ sub cop {
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player_i = $tournament_players->[$i];
         for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
-            my $both_cannot_get_payout = $i > $lowest_ranked_player_who_can_cash_statistically && $j > $lowest_ranked_player_who_can_cash_statistically;
+            my $both_cannot_get_payout = $i > $lowest_ranked_player_who_can_cash_absolutely &&
+            $j > $lowest_ranked_player_who_can_cash_absolutely;
             my $player_j = $tournament_players->[$j];
 
             my $number_of_times_played =
@@ -719,13 +718,24 @@ sub cop {
                     # If:
                     #  Control loss is active for this part of the tournament, and
                     #  We are considering the player in first, and
-                    #  the control loss meets the threshold, and
-                    #  the opponent is lower ranked than the minimum of:
-                    #    the person who can get first in the sims and
-                    #    the lowest ranked always winning person
-                    if (  $control_loss_active && $i == 0
-                        && $control_loss > $adjusted_control_loss_threshold &&
-                        $j != min($lowest_ranked_players_who_can_finish_in_nth_statistically->[$i], $lowest_ranked_always_wins))
+                    #    the control loss meets the threshold, and
+                    #    the opponent is lower ranked than the minimum of:
+                    #      the person who can get first in the sims and
+                    #      the lowest ranked always winning person
+                    #    or, if control loss threshold isn't met
+                    #       the person who can get first in the sims and
+                    if (
+                        $control_loss_active && $i == 0
+                        &&
+                        (
+                        ($control_loss > $adjusted_control_loss_threshold &&
+                        $j != min($lowest_ranked_players_who_can_finish_in_nth_statistically->[$i],
+                        $lowest_ranked_always_wins))
+                        ||
+                        ($control_loss <= $adjusted_control_loss_threshold &&
+                        $j != $lowest_ranked_players_who_can_finish_in_nth_statistically->[$i])
+                        )
+                        )
                     {
                         $control_loss_weight = PROHIBITIVE_WEIGHT;
                     }

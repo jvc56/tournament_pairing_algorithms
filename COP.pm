@@ -99,16 +99,24 @@ sub Run ($$@) {
         return 0;
     }
 
+    my $last_paired_round0 = $dp->LastPairedRound0();
+
     my $timestamp = localtime();
     $timestamp =~ s/[\s\:]/_/g;
     my $division_name = $dp->Name();
     my $sr1           = $sr0 + 1;
+
+    # +2 because:
+    #  0-index to 1-index for humans, and
+    #  TSH pairs the next available round
     my $log_filename =
-      "$log_dir$timestamp" . "_div_$division_name" . "_round_$sr1.log";
+        "$log_dir$timestamp"
+      . "_$division_name"
+      . "_round_"
+      . ( $last_paired_round0 + 2 )
+      . "_based_on_$sr1" . ".log";
 
     my $max_round = $dp->MaxRound0();
-
-    my $last_paired_round0 = $dp->LastPairedRound0();
 
     # Extract TSH config vars
 
@@ -155,6 +163,14 @@ sub Run ($$@) {
         return 0;
     }
 
+    my $control_loss_activation_percentage =
+      $tournament->Config()->Value('control_loss_activation_percentage');
+    if ( !defined $control_loss_activation_percentage ) {
+        $tournament->TellUser( 'ebadconfigentry',
+            'control_loss_activation_percentage' );
+        return 0;
+    }
+
     # Create the special config for cop
     my $cop_config = {
         log_filename               => $log_filename,
@@ -163,16 +179,19 @@ sub Run ($$@) {
         always_wins_number_of_sims => $always_wins_number_of_sims,
         control_loss_thresholds =>
           extend_tsh_config_array( $control_loss_thresholds, $max_round ),
+        control_loss_activation_percentage =>
+          $control_loss_activation_percentage,
         number_of_rounds_remaining => $max_round - $sr0,
         lowest_ranked_payout       => $lowest_ranked_payout,
         cumulative_gibson_spreads =>
           get_cumulative_gibson_spreads( $gibson_spread, $max_round ),
-          gibson_spreads => extend_tsh_config_array($gibson_spread, $max_round),
-        hopefulness => extend_tsh_config_array( $hopefulness, $max_round ),
+        gibson_spreads => extend_tsh_config_array( $gibson_spread, $max_round ),
+        hopefulness    => extend_tsh_config_array( $hopefulness,   $max_round ),
     };
 
-    my %times_played = ();
+    my %times_played          = ();
     my %previous_pairing_hash = ();
+
     # Iterate through the players in a division
     my @players            = $dp->Players();
     my $number_of_players  = scalar @players;
@@ -186,24 +205,31 @@ sub Run ($$@) {
             my $number_of_times_played =
               $player->CountRoundRepeats( $opponent, $last_paired_round0 );
             my $number_of_times_played_excluding_last_round =
-              $player->CountRoundRepeats( $opponent, $last_paired_round0 - 1);
+              $player->CountRoundRepeats( $opponent, $last_paired_round0 - 1 );
 
-            my $played_last_round = $number_of_times_played - $number_of_times_played_excluding_last_round;
-            if ($played_last_round > 1) {
-                $tournament->TellUser( 'eapfail',
-            sprintf("these players played more than once last round: %s and %s (%d)",
-             $player->PrettyName(), $opponent->PrettyName(), $played_last_round));
+            my $played_last_round = $number_of_times_played -
+              $number_of_times_played_excluding_last_round;
+            if ( $played_last_round > 1 ) {
+                $tournament->TellUser(
+                    'eapfail',
+                    sprintf(
+"these players played more than once last round: %s and %s (%d)",
+                        $player->PrettyName(), $opponent->PrettyName(),
+                        $played_last_round
+                    )
+                );
                 return 0;
             }
             my $times_played_key =
               create_times_played_key( $player_index, $opponent_index );
             $times_played{$times_played_key} = $number_of_times_played;
-            if ($played_last_round == 1) {
+            if ( $played_last_round == 1 ) {
                 $previous_pairing_hash{$times_played_key} = 1;
             }
         }
 
-        my $times_given_bye_key = create_times_played_key( $player_index, $number_of_players );
+        my $times_given_bye_key =
+          create_times_played_key( $player_index, $number_of_players );
 
         # Count the byes by up to the based on round
         # (There does not seem to be an existing Player method for this)
@@ -227,7 +253,10 @@ sub Run ($$@) {
         );
     }
 
-    my $pairings = cop( $cop_config, \@tournament_players, \%times_played, \%previous_pairing_hash );
+    my $pairings = cop(
+        $cop_config,    \@tournament_players,
+        \%times_played, \%previous_pairing_hash
+    );
 
     my $setupp = $this->SetupForPairings(
         'division' => $dp,
@@ -242,7 +271,8 @@ sub Run ($$@) {
         my $player_id   = $i + 1;
         my $opponent_id = $pairings->[$i] + 1;
 
-        if ($opponent_id > $number_of_players) {
+        if ( $opponent_id > $number_of_players ) {
+
             # This is a bye
             $opponent_id = 0;
         }
@@ -377,11 +407,12 @@ sub reset_tournament_player {
 }
 
 sub add_bye_player {
-    my ($tournament_players, $bye_player_index) = @_;
+    my ( $tournament_players, $bye_player_index ) = @_;
 
     # This display index can be the same as the original index
     push @{$tournament_players},
-      new_tournament_player( 'BYE', $bye_player_index, $bye_player_index, 0, 0, 1 );
+      new_tournament_player( 'BYE', $bye_player_index, $bye_player_index, 0, 0,
+        1 );
 }
 
 # Extract lowest payout rank
@@ -459,11 +490,15 @@ sub extend_tsh_config_array {
 # Pairing and simming
 
 sub cop {
-    my ( $config, $tournament_players, $times_played_hash, $previous_pairing_hash ) = @_;
+    my (
+        $config,            $tournament_players,
+        $times_played_hash, $previous_pairing_hash
+    ) = @_;
 
     log_info( $config, "\n\nCOP Config:\n\n" . Dumper($config) );
 
-    log_info( $config, "\n\nPrevious Pairing Hash:\n\n" . Dumper($previous_pairing_hash) );
+    log_info( $config,
+        "\n\nPrevious Pairing Hash:\n\n" . Dumper($previous_pairing_hash) );
 
     # Lowest ranked payout was given as 1-indexed
     # To keep this consistent with the rest of the 0-indexed
@@ -479,7 +514,7 @@ sub cop {
     my $number_of_players = scalar(@$tournament_players);
 
     if ( $number_of_players % 2 == 1 ) {
-        add_bye_player($tournament_players, $number_of_players);
+        add_bye_player( $tournament_players, $number_of_players );
         $number_of_players = scalar(@$tournament_players);
     }
 
@@ -548,16 +583,20 @@ sub cop {
 
     sort_tournament_players_by_record($sim_tournament_players);
 
-    my ($lowest_ranked_players_who_can_finish_in_nth_statistically,
-     $lowest_ranked_players_who_can_finish_in_nth_absolutely) =
-      get_lowest_ranked_players_who_can_finish_in_nth( $config, $factor_pair_results,
-        $sim_tournament_players );
+    my (
+        $lowest_ranked_players_who_can_finish_in_nth_statistically,
+        $lowest_ranked_players_who_can_finish_in_nth_absolutely
+      )
+      = get_lowest_ranked_players_who_can_finish_in_nth( $config,
+        $factor_pair_results, $sim_tournament_players );
 
     my $lowest_ranked_player_who_can_cash_statistically =
-      $lowest_ranked_players_who_can_finish_in_nth_statistically->[ $config->{lowest_ranked_payout} ];
+      $lowest_ranked_players_who_can_finish_in_nth_statistically
+      ->[ $config->{lowest_ranked_payout} ];
 
     my $lowest_ranked_player_who_can_cash_absolutely =
-      $lowest_ranked_players_who_can_finish_in_nth_absolutely->[ $config->{lowest_ranked_payout} ];
+      $lowest_ranked_players_who_can_finish_in_nth_absolutely
+      ->[ $config->{lowest_ranked_payout} ];
 
     log_info(
         $config,
@@ -571,8 +610,8 @@ sub cop {
         sprintf(
             "\nLowest ranked player who can still cash statistically: %d (%s)",
             $lowest_ranked_player_who_can_cash_statistically,
-            $sim_tournament_players->[$lowest_ranked_player_who_can_cash_statistically]
-              ->{name}
+            $sim_tournament_players
+              ->[$lowest_ranked_player_who_can_cash_statistically]->{name}
         )
     );
 
@@ -581,31 +620,30 @@ sub cop {
         sprintf(
             "\nLowest ranked player who can still cash absolutely: %d (%s)",
             $lowest_ranked_player_who_can_cash_absolutely,
-            $sim_tournament_players->[$lowest_ranked_player_who_can_cash_absolutely]
-              ->{name}
+            $sim_tournament_players
+              ->[$lowest_ranked_player_who_can_cash_absolutely]->{name}
         )
     );
 
-    my $control_loss_active = $config->{number_of_rounds_remaining} <= 4;
+    my $control_loss_active =
+      ( $config->{number_of_rounds_remaining} / $config->{number_of_rounds} )
+      <= $config->{control_loss_activation_percentage};
 
     my $control_status_text = 'ACTIVE';
 
-    if (!$control_loss_active) {
+    if ( !$control_loss_active ) {
         $control_status_text = 'DISABLED';
     }
 
-    log_info(
-        $config,
-        sprintf("\n\nControl loss is %s\n\n", $control_status_text)
-    );
-
+    log_info( $config,
+        sprintf( "\n\nControl loss is %s\n\n", $control_status_text ) );
 
     log_info(
         $config,
         sprintf(
 "\n\nWeights\n\n%-92s | %-3s = %7s = %7s + %7s + %7s + %7s + %7s + %7s\n",
             "Pairing", "Rpt",     "Total",  "Repeats", "RankDif",
-            "RankPla",  "Control", "Gibson", "KOTH"
+            "RankPla", "Control", "Gibson", "KOTH"
         )
     );
 
@@ -613,16 +651,15 @@ sub cop {
     # using all of the tournament players since
     # everyone needs to be paired
 
-    # Need to account for gibsons in KOTH round
-
     my $max_weight  = 0;
     my @edges       = ();
     my %weight_hash = ();
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player_i = $tournament_players->[$i];
         for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
-            my $both_cannot_get_payout = $i > $lowest_ranked_player_who_can_cash_absolutely &&
-            $j > $lowest_ranked_player_who_can_cash_absolutely;
+            my $both_cannot_get_payout =
+                 $i > $lowest_ranked_player_who_can_cash_absolutely
+              && $j > $lowest_ranked_player_who_can_cash_absolutely;
             my $player_j = $tournament_players->[$j];
 
             my $number_of_times_played =
@@ -632,18 +669,23 @@ sub cop {
             my $repeat_weight = int( ( $number_of_times_played * 2 ) *
                   ( ( $number_of_players / 3 )**3 ) );
 
-            my $times_played_key = create_times_played_key($player_i->{index}, $player_j->{index});
-            if ($both_cannot_get_payout && $previous_pairing_hash->{$times_played_key}) {
-                # If both players are out of the money avoid a back to back repeat
+            my $times_played_key =
+              create_times_played_key( $player_i->{index}, $player_j->{index} );
+            if (   $both_cannot_get_payout
+                && $previous_pairing_hash->{$times_played_key} )
+            {
+              # If both players are out of the money avoid a back to back repeat
                 $repeat_weight += PROHIBITIVE_WEIGHT;
             }
 
             my $rank_difference_weight;
+
             # If neither player can cash, rank difference weight
             # should count for very little.
             if ($both_cannot_get_payout) {
                 $rank_difference_weight = ( $j - $i );
-            } else {
+            }
+            else {
                 $rank_difference_weight = ( $j - $i )**3;
             }
 
@@ -657,9 +699,17 @@ sub cop {
 
                 # For the last round, just do KOTH for all players
                 # eligible for a cash payout
-                if (($i <= $lowest_gibson_rank && $j <= $lowest_ranked_player_who_can_cash_absolutely )  ||
-                ( $i > $lowest_gibson_rank && $i <= $lowest_ranked_player_who_can_cash_absolutely &&
-                ( $lowest_gibson_rank % 2 == $i % 2 || $i + 1 != $j )  )  ) {
+                if (
+                    (
+                           $i <= $lowest_gibson_rank
+                        && $j <= $lowest_ranked_player_who_can_cash_absolutely
+                    )
+                    || (   $i > $lowest_gibson_rank
+                        && $i <= $lowest_ranked_player_who_can_cash_absolutely
+                        && ( $lowest_gibson_rank % 2 == $i % 2 || $i + 1 != $j )
+                    )
+                  )
+                {
                     # player i needs to paired with the player
                     # immediately after them in the rankings.
                     # If player i has a odd rank, then they have
@@ -684,12 +734,18 @@ sub cop {
                 elsif ( $i > $lowest_gibson_rank && $j > $lowest_gibson_rank ) {
 
                     # Neither player is gibsonized
-                    if ( $i <= $lowest_ranked_player_who_can_cash_statistically ) {
+                    if (
+                        $i <= $lowest_ranked_player_who_can_cash_statistically )
+                    {
 
                         # player i can still cash
                         if (
-                            $j <= $lowest_ranked_players_who_can_finish_in_nth_statistically->[$i]
-                            || (   $i == $lowest_ranked_players_who_can_finish_in_nth_statistically->[$i]
+                            $j <=
+                            $lowest_ranked_players_who_can_finish_in_nth_statistically
+                            ->[$i]
+                            || ( $i ==
+                                $lowest_ranked_players_who_can_finish_in_nth_statistically
+                                ->[$i]
                                 && $i == $j - 1 )
                           )
                         {
@@ -701,9 +757,14 @@ sub cop {
                             # play player j if i = j - 1
 
                             # add a penalty for the distance of this pairing
-                            $pair_with_placer_weight =
-                              ( ( abs( $lowest_ranked_players_who_can_finish_in_nth_statistically->[$i] - $j ) )
-                                **3 ) * 2;
+                            $pair_with_placer_weight = (
+                                (
+                                    abs(
+                                        $lowest_ranked_players_who_can_finish_in_nth_statistically
+                                          ->[$i] - $j
+                                    )
+                                )**3
+                            ) * 2;
                         }
                         else {
                             # player j can't catch player i, so they should
@@ -715,27 +776,34 @@ sub cop {
                     # Control loss weight
                     # Only applies to the player in first
 
-                    # If:
-                    #  Control loss is active for this part of the tournament, and
-                    #  We are considering the player in first, and
-                    #    the control loss meets the threshold, and
-                    #    the opponent is lower ranked than the minimum of:
-                    #      the person who can get first in the sims and
-                    #      the lowest ranked always winning person
-                    #    or, if control loss threshold isn't met
-                    #       the person who can get first in the sims and
+                  # If:
+                  #  Control loss is active for this part of the tournament, and
+                  #  We are considering the player in first, and
+                  #    the control loss meets the threshold, and
+                  #    the opponent is lower ranked than the minimum of:
+                  #      the person who can get first in the sims and
+                  #      the lowest ranked always winning person
+                  #    or, if control loss threshold isn't met
+                  #       the person who can get first in the sims and
                     if (
-                        $control_loss_active && $i == 0
-                        &&
-                        (
-                        ($control_loss > $adjusted_control_loss_threshold &&
-                        $j != min($lowest_ranked_players_who_can_finish_in_nth_statistically->[$i],
-                        $lowest_ranked_always_wins))
-                        ||
-                        ($control_loss <= $adjusted_control_loss_threshold &&
-                        $j != $lowest_ranked_players_who_can_finish_in_nth_statistically->[$i])
+                           $control_loss_active
+                        && $i == 0
+                        && (
+                            (
+                                $control_loss >
+                                $adjusted_control_loss_threshold && $j != min(
+                                    $lowest_ranked_players_who_can_finish_in_nth_statistically
+                                      ->[$i],
+                                    $lowest_ranked_always_wins
+                                )
+                            )
+                            || ( $control_loss <=
+                                   $adjusted_control_loss_threshold
+                                && $j !=
+                                $lowest_ranked_players_who_can_finish_in_nth_statistically
+                                ->[$i] )
                         )
-                        )
+                      )
                     {
                         $control_loss_weight = PROHIBITIVE_WEIGHT;
                     }
@@ -838,13 +906,9 @@ sub get_lowest_ranked_players_who_can_finish_in_nth {
 
     my $sim_number_of_players = scalar @{$sim_tournament_players};
 
-    my $adjusted_hopefulness = 0;
-    if ( ( $config->{number_of_rounds_remaining} ) <
-        scalar( @{ $config->{hopefulness} } ) )
-    {
-        $adjusted_hopefulness =
-          $config->{hopefulness}->[ $config->{number_of_rounds_remaining} ];
-    }
+    # use -1 because number of rounds remaining is 1-indexed and
+    # perl arrays are 0-indexed.
+    my $adjusted_hopefulness = $config->{hopefulness}->[ $config->{number_of_rounds_remaining} - 1];
 
     my @lowest_ranked_players_who_can_finish_in_nth_statistically =
       (0) x ( $sim_number_of_players * $sim_number_of_players );
@@ -875,13 +939,13 @@ sub get_lowest_ranked_players_who_can_finish_in_nth {
             }
             my $place_percentage = $sum / $config->{number_of_sims};
             if ( $place_percentage > $adjusted_hopefulness ) {
-                $lowest_ranked_players_who_can_finish_in_nth_statistically[$final_rank_index] =
-                  $player_current_rank_index;
+                $lowest_ranked_players_who_can_finish_in_nth_statistically
+                  [$final_rank_index] = $player_current_rank_index;
             }
 
-            if ($sum > 0) {
-                $lowest_ranked_players_who_can_finish_in_nth_absolutely[$final_rank_index] =
-                  $player_current_rank_index;
+            if ( $sum > 0 ) {
+                $lowest_ranked_players_who_can_finish_in_nth_absolutely
+                  [$final_rank_index] = $player_current_rank_index;
             }
         }
     }
@@ -898,8 +962,12 @@ sub get_lowest_ranked_players_who_can_finish_in_nth {
                 "Lowest ranked possible winner for rank %d: %s\n",
                 $i + 1,
                 player_string(
-                    $sim_tournament_players->[ $lowest_ranked_players_who_can_finish_in_nth_statistically[$i] ],
-                    $lowest_ranked_players_who_can_finish_in_nth_statistically[$i]
+                    $sim_tournament_players->[
+                      $lowest_ranked_players_who_can_finish_in_nth_statistically
+                      [$i]
+                    ],
+                    $lowest_ranked_players_who_can_finish_in_nth_statistically
+                      [$i]
                 )
             )
         );
@@ -910,7 +978,6 @@ sub get_lowest_ranked_players_who_can_finish_in_nth {
           . sprintf( "\nAdjusted hopefulness: %0.6f\n\n",
             $adjusted_hopefulness ) );
 
-
     for ( my $i = 0 ; $i <= $config->{lowest_ranked_payout} ; $i++ ) {
         log_info(
             $config,
@@ -918,14 +985,18 @@ sub get_lowest_ranked_players_who_can_finish_in_nth {
                 "Lowest ranked possible winner for rank %d: %s\n",
                 $i + 1,
                 player_string(
-                    $sim_tournament_players->[ $lowest_ranked_players_who_can_finish_in_nth_absolutely[$i] ],
+                    $sim_tournament_players->[
+                      $lowest_ranked_players_who_can_finish_in_nth_absolutely
+                      [$i]
+                    ],
                     $lowest_ranked_players_who_can_finish_in_nth_absolutely[$i]
                 )
             )
         );
     }
 
-    return \@lowest_ranked_players_who_can_finish_in_nth_statistically, \@lowest_ranked_players_who_can_finish_in_nth_absolutely;
+    return \@lowest_ranked_players_who_can_finish_in_nth_statistically,
+      \@lowest_ranked_players_who_can_finish_in_nth_absolutely;
 }
 
 sub get_control_loss {
@@ -937,8 +1008,10 @@ sub get_control_loss {
       sim_player_always_wins( $config, $sim_tournament_players );
 
     my $lowest_ranked_always_wins = 0;
-    for ( my $i = 0 ; $i < scalar @{$always_wins_pair_player_with_first} ; $i++ ) {
-        if ( $always_wins_pair_player_with_first->[ $i ] ==
+    for ( my $i = 0 ;
+        $i < scalar @{$always_wins_pair_player_with_first} ; $i++ )
+    {
+        if ( $always_wins_pair_player_with_first->[$i] ==
             $config->{always_wins_number_of_sims} )
         {
             $lowest_ranked_always_wins = $i + 1;
@@ -1082,7 +1155,7 @@ sub sim_factor_pair {
         {
             my $pairings =
               factor_pair( $sim_tournament_players, $remaining_rounds );
-            my $max_spread = $config->{gibson_spreads}->[-$remaining_rounds];
+            my $max_spread = $config->{gibson_spreads}->[ -$remaining_rounds ];
             play_round( $pairings, $sim_tournament_players, -1, $max_spread );
         }
         record_tournament_results( $results, $sim_tournament_players );
@@ -1149,7 +1222,8 @@ sub sim_player_always_wins {
                     $sim_tournament_players, $remaining_rounds,
                     $player_in_nth_index,    \%player_index_to_rank
                 );
-                my $max_spread = $config->{gibson_spreads}->[-$remaining_rounds];
+                my $max_spread =
+                  $config->{gibson_spreads}->[ -$remaining_rounds ];
                 play_round( $pairings, $sim_tournament_players,
                     $player_index_to_rank{$player_in_nth_index}, $max_spread );
 
@@ -1178,7 +1252,8 @@ sub sim_player_always_wins {
                   0 .. scalar(@$sim_tournament_players) - 1;
                 my $pairings =
                   factor_pair( $sim_tournament_players, $remaining_rounds );
-                my $max_spread = $config->{gibson_spreads}->[-$remaining_rounds];
+                my $max_spread =
+                  $config->{gibson_spreads}->[ -$remaining_rounds ];
                 play_round( $pairings, $sim_tournament_players,
                     $player_index_to_rank{$player_in_nth_index}, $max_spread );
 
@@ -1217,7 +1292,7 @@ sub play_round {
                 next outer;
             }
         }
-        my $spread = int($max_spread / 2) - int( rand($max_spread + 1) );
+        my $spread = int( $max_spread / 2 ) - int( rand( $max_spread + 1 ) );
         if ( $forced_win_player >= 0 ) {
             if ( $pairing->[0] == $forced_win_player ) {
                 $spread = abs($spread) + 1;
@@ -1478,8 +1553,8 @@ sub pairings_string {
 }
 
 sub min {
-    my ($x, $y) = @_;
-    if ($x < $y) {
+    my ( $x, $y ) = @_;
+    if ( $x < $y ) {
         return $x;
     }
     return $y;

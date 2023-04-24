@@ -647,6 +647,33 @@ sub cop {
         )
     );
 
+    # Get the number of repeats for each individual player
+    my %number_of_repeats = ();
+
+    for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
+        my $player_i = $tournament_players->[$i];
+        for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
+            my $player_j = $tournament_players->[$j];
+            my $number_of_times_played =
+              get_number_of_times_played( $player_i->{index},
+                $player_j->{index}, $times_played_hash );
+
+            if ( !exists $number_of_repeats{ $player_i->{index} } ) {
+                $number_of_repeats{ $player_i->{index} } = 0;
+            }
+
+            if ( !exists $number_of_repeats{ $player_j->{index} } ) {
+                $number_of_repeats{ $player_j->{index} } = 0;
+            }
+
+            if ( $number_of_times_played > 1 ) {
+                my $repeats = $number_of_times_played - 1;
+                $number_of_repeats{ $player_i->{index} } += $repeats;
+                $number_of_repeats{ $player_j->{index} } += $repeats;
+            }
+        }
+    }
+
     # For the min weight matching, switch back to
     # using all of the tournament players since
     # everyone needs to be paired
@@ -657,10 +684,10 @@ sub cop {
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player_i = $tournament_players->[$i];
         for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
+            my $player_j = $tournament_players->[$j];
             my $both_cannot_get_payout =
                  $i > $lowest_ranked_player_who_can_cash_absolutely
               && $j > $lowest_ranked_player_who_can_cash_absolutely;
-            my $player_j = $tournament_players->[$j];
 
             my $number_of_times_played =
               get_number_of_times_played( $player_i->{index},
@@ -676,6 +703,10 @@ sub cop {
             {
               # If both players are out of the money avoid a back to back repeat
                 $repeat_weight += PROHIBITIVE_WEIGHT;
+            }
+            elsif ( $number_of_times_played > 0 ) {
+                $repeat_weight += ( $number_of_repeats{ $player_i->{index} } +
+                      $number_of_repeats{ $player_j->{index} } ) * 2;
             }
 
             my $rank_difference_weight;
@@ -737,7 +768,6 @@ sub cop {
                     if (
                         $i <= $lowest_ranked_player_who_can_cash_statistically )
                     {
-
                         # player i can still cash
                         if (
                             $j <=
@@ -749,7 +779,6 @@ sub cop {
                                 && $i == $j - 1 )
                           )
                         {
-
                             # player j can still can catch player i
                             # or
                             # no one in the simulations catch up to player i
@@ -908,7 +937,8 @@ sub get_lowest_ranked_players_who_can_finish_in_nth {
 
     # use -1 because number of rounds remaining is 1-indexed and
     # perl arrays are 0-indexed.
-    my $adjusted_hopefulness = $config->{hopefulness}->[ $config->{number_of_rounds_remaining} - 1];
+    my $adjusted_hopefulness =
+      $config->{hopefulness}->[ $config->{number_of_rounds_remaining} - 1 ];
 
     my @lowest_ranked_players_who_can_finish_in_nth_statistically =
       (0) x ( $sim_number_of_players * $sim_number_of_players );
@@ -947,6 +977,72 @@ sub get_lowest_ranked_players_who_can_finish_in_nth {
                 $lowest_ranked_players_who_can_finish_in_nth_absolutely
                   [$final_rank_index] = $player_current_rank_index;
             }
+        }
+    }
+
+    # The winner group has at least one person
+    my $statistical_winner_group_size = 1;
+    my $lowest_ranked_winner =
+      $lowest_ranked_players_who_can_finish_in_nth_statistically[0];
+    my $lowest_lockout_rank = 0;
+    if ( $lowest_ranked_winner != 0 ) {
+
+        # If the current tournament leader isn't gibsonized
+        # the winner group must have at least 2 people
+        $statistical_winner_group_size = 2;
+        for ( my $i = 1 ; $i < scalar @{$sim_tournament_players} ; $i++ ) {
+            if ( $lowest_ranked_players_who_can_finish_in_nth_statistically[$i]
+                != $lowest_ranked_winner )
+            {
+                last;
+            }
+            $statistical_winner_group_size++;
+            $lowest_lockout_rank = $i;
+        }
+    }
+
+    log_info(
+        $config,
+        sprintf(
+            "\nWinner group size: %d (%s)\n",
+            $statistical_winner_group_size,
+            $sim_tournament_players->[$lowest_ranked_winner]->{name}
+        )
+    );
+
+    if (   $statistical_winner_group_size > 1
+        && $statistical_winner_group_size % 2 == 1 )
+    {
+        # The winner group is odd, we need to bring in someone
+        # who is technically not included to even it.
+        if ( $lowest_ranked_players_who_can_finish_in_nth_statistically
+            [$lowest_lockout_rank] == $sim_number_of_players - 1 )
+        {
+            log_info( $config, "\nWARNING: cannot expand winner group\n", );
+        }
+        else {
+            my $previous_player =
+              $lowest_ranked_players_who_can_finish_in_nth_statistically
+              [$lowest_lockout_rank];
+            $lowest_ranked_players_who_can_finish_in_nth_statistically
+              [$lowest_lockout_rank]++;
+            my $new_player =
+              $lowest_ranked_players_who_can_finish_in_nth_statistically
+              [$lowest_lockout_rank];
+            log_info(
+                $config,
+                sprintf(
+                    "\nWinner group was expanded for %d: %s -> %s\n",
+                    $lowest_lockout_rank + 1,
+                    player_string(
+                        $sim_tournament_players->[$previous_player],
+                        $previous_player
+                    ),
+                    player_string(
+                        $sim_tournament_players->[$new_player], $new_player
+                    )
+                )
+            );
         }
     }
 

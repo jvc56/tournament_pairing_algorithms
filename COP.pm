@@ -163,26 +163,27 @@ sub Run ($$@) {
         return 0;
     }
 
-    my $control_loss_activation_percentage =
-      $tournament->Config()->Value('control_loss_activation_percentage');
-    if ( !defined $control_loss_activation_percentage ) {
+    my $control_loss_activation_round =
+      $tournament->Config()->Value('control_loss_activation_round');
+    if ( !defined $control_loss_activation_round ) {
         $tournament->TellUser( 'ebadconfigentry',
-            'control_loss_activation_percentage' );
+            'control_loss_activation_round' );
         return 0;
     }
 
     # Create the special config for cop
     my $cop_config = {
-        log_filename               => $log_filename,
-        number_of_sims             => $number_of_sims,
-        number_of_rounds           => $max_round,
+        log_filename   => $log_filename,
+        number_of_sims => $number_of_sims,
+
+        # $max_round is 0 indexed
+        number_of_rounds           => $max_round + 1,
         always_wins_number_of_sims => $always_wins_number_of_sims,
         control_loss_thresholds =>
           extend_tsh_config_array( $control_loss_thresholds, $max_round ),
-        control_loss_activation_percentage =>
-          $control_loss_activation_percentage,
-        number_of_rounds_remaining => $max_round - $sr0,
-        lowest_ranked_payout       => $lowest_ranked_payout,
+        control_loss_activation_round => $control_loss_activation_round - 1,
+        number_of_rounds_remaining    => $max_round - $sr0,
+        lowest_ranked_payout          => $lowest_ranked_payout,
         cumulative_gibson_spreads =>
           get_cumulative_gibson_spreads( $gibson_spread, $max_round ),
         gibson_spreads => extend_tsh_config_array( $gibson_spread, $max_round ),
@@ -626,8 +627,8 @@ sub cop {
     );
 
     my $control_loss_active =
-      ( $config->{number_of_rounds_remaining} / $config->{number_of_rounds} )
-      <= $config->{control_loss_activation_percentage};
+      $config->{number_of_rounds} - $config->{number_of_rounds_remaining} >=
+      ( $config->{control_loss_activation_round} - 1 );
 
     my $control_status_text = 'ACTIVE';
 

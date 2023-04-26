@@ -887,6 +887,8 @@ sub cop {
     my $pairings =
       convert_matching_to_index_pairings( $matching, $tournament_players );
 
+    sort_tournament_players_by_index($tournament_players);
+
     my $weight_sum = 0;
     for ( my $i = 0 ; $i < scalar @{$pairings} ; $i++ ) {
         my $j = $pairings->[$i];

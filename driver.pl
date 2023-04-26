@@ -188,7 +188,7 @@ sub create_cop_config {
         $start_round,             $final_round,
         $number_of_sims,          $always_wins_number_of_sims,
         $lowest_ranked_payout,    $gibson_spread,
-        $control_loss_thresholds, $control_loss_activation_percentage,
+        $control_loss_thresholds, $control_loss_activation_round,
         $hopefulness,             $log_filename
     ) = @_;
 
@@ -205,8 +205,7 @@ sub create_cop_config {
           extend_tsh_config_array( $gibson_spread, $final_round - 1 ),
         control_loss_thresholds =>
           extend_tsh_config_array( $control_loss_thresholds, $final_round - 1 ),
-        control_loss_activation_percentage =>
-          $control_loss_activation_percentage,
+        control_loss_activation_round => $control_loss_activation_round,
         hopefulness =>
           extend_tsh_config_array( $hopefulness, $final_round - 1 ),
     };
@@ -233,7 +232,7 @@ sub create_cop_config_and_get_pairings {
         $start_round,             $final_round,
         $number_of_sims,          $always_wins_number_of_sims,
         $lowest_ranked_payout,    $gibson_spreads,
-        $control_loss_thresholds, $control_loss_activation_percentage,
+        $control_loss_thresholds, $control_loss_activation_round,
         $hopefulness,             $log_filename,
         $filename
     ) = @_;
@@ -243,7 +242,7 @@ sub create_cop_config_and_get_pairings {
         $start_round,             $final_round,
         $number_of_sims,          $always_wins_number_of_sims,
         $lowest_ranked_payout,    $gibson_spreads,
-        $control_loss_thresholds, $control_loss_activation_percentage,
+        $control_loss_thresholds, $control_loss_activation_round,
         $hopefulness,             $log_filename
     );
 
@@ -379,7 +378,7 @@ sub get_config_for_t_file_round {
         $start_round, $final_round,
         1000,         1000,
         $lowest_ranked_payout, [ 300, 250, 200 ],
-        [0.25], 0.5,
+        [0.25], $final_round - 4,
         [ 0, 0.1, 0.05, 0.01 ], $log_filename
     );
 }

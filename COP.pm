@@ -815,6 +815,16 @@ sub cop {
                   #      the lowest ranked always winning person
                   #    or, if control loss threshold isn't met
                   #       the person who can get first in the sims and
+                    my $lowest_ranked_person_who_can_win =
+                      $lowest_ranked_players_who_can_finish_in_nth_statistically
+                      ->[0];
+                    if ( $lowest_ranked_person_who_can_win == 0 ) {
+
+                        # This player is not gibsonized, but no one reached
+                        # them in the simulations, so just make the lowest
+                        # ranked person who can win the player in 2nd
+                        $lowest_ranked_person_who_can_win = 1;
+                    }
                     if (
                            $control_loss_active
                         && $i == 0
@@ -822,16 +832,13 @@ sub cop {
                             (
                                 $control_loss >
                                 $adjusted_control_loss_threshold && $j != min(
-                                    $lowest_ranked_players_who_can_finish_in_nth_statistically
-                                      ->[$i],
+                                    $lowest_ranked_person_who_can_win,
                                     $lowest_ranked_always_wins
                                 )
                             )
                             || ( $control_loss <=
                                    $adjusted_control_loss_threshold
-                                && $j !=
-                                $lowest_ranked_players_who_can_finish_in_nth_statistically
-                                ->[$i] )
+                                && $j != $lowest_ranked_person_who_can_win )
                         )
                       )
                     {
@@ -879,6 +886,8 @@ sub cop {
     my $matching = min_weight_matching( \@edges, $max_weight );
     my $pairings =
       convert_matching_to_index_pairings( $matching, $tournament_players );
+
+    sort_tournament_players_by_index($tournament_players);
 
     my $weight_sum = 0;
     for ( my $i = 0 ; $i < scalar @{$pairings} ; $i++ ) {

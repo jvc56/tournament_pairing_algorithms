@@ -712,9 +712,9 @@ sub cop {
 
             my $rank_difference_weight;
 
-            # If neither player can cash, rank difference weight
-            # should count for very little.
-            if ($both_cannot_get_payout) {
+            # If neither player can cash or player i is gibsonized,
+            # rank difference weight should count for very little.
+            if ( $both_cannot_get_payout || $i <= $lowest_gibson_rank ) {
                 $rank_difference_weight = ( $j - $i );
             }
             else {

@@ -610,7 +610,7 @@ sub cop {
         $config,
         sprintf(
             "\nLowest ranked player who can still cash statistically: %d (%s)",
-            $lowest_ranked_player_who_can_cash_statistically,
+            $lowest_ranked_player_who_can_cash_statistically + 1,
             $sim_tournament_players
               ->[$lowest_ranked_player_who_can_cash_statistically]->{name}
         )
@@ -620,7 +620,7 @@ sub cop {
         $config,
         sprintf(
             "\nLowest ranked player who can still cash absolutely: %d (%s)",
-            $lowest_ranked_player_who_can_cash_absolutely,
+            $lowest_ranked_player_who_can_cash_absolutely + 1,
             $sim_tournament_players
               ->[$lowest_ranked_player_who_can_cash_absolutely]->{name}
         )
@@ -679,6 +679,9 @@ sub cop {
     # using all of the tournament players since
     # everyone needs to be paired
 
+    # Existing problems:
+    # Someone is gibsonized, but everyone can still cash
+
     my $max_weight  = 0;
     my @edges       = ();
     my %weight_hash = ();
@@ -703,7 +706,7 @@ sub cop {
                 && $previous_pairing_hash->{$times_played_key} )
             {
               # If both players are out of the money avoid a back to back repeat
-                $repeat_weight += PROHIBITIVE_WEIGHT;
+                $repeat_weight += ( PROHIBITIVE_WEIGHT / 10 );
             }
             elsif ( $number_of_times_played > 0 ) {
                 $repeat_weight += ( $number_of_repeats{ $player_i->{index} } +
@@ -757,7 +760,8 @@ sub cop {
                 # control loss or placement.
                 if (   $i <= $lowest_gibson_rank
                     && $j > $lowest_gibson_rank
-                    && $j <= $lowest_ranked_player_who_can_cash_absolutely )
+                    && $j <= $lowest_ranked_player_who_can_cash_absolutely
+                    && $j != ( $number_of_players - 1 ) )
                 {
                     # player i is gibsonized and player j can still cash, they
                     # shouldn't be paired
@@ -799,7 +803,8 @@ sub cop {
                         else {
                             # player j can't catch player i, so they should
                             # preferrably not be paired
-                            $pair_with_placer_weight = PROHIBITIVE_WEIGHT;
+                            $pair_with_placer_weight =
+                              ( PROHIBITIVE_WEIGHT / 2 );
                         }
                     }
 
@@ -991,46 +996,30 @@ sub get_lowest_ranked_players_who_can_finish_in_nth {
     }
 
     # The winner group has at least one person
-    my $statistical_winner_group_size = 1;
+    my $contender_group_size = 1;
     my $lowest_ranked_winner =
       $lowest_ranked_players_who_can_finish_in_nth_statistically[0];
-    my $lowest_lockout_rank = 0;
-    if ( $lowest_ranked_winner != 0 ) {
-
-        # If the current tournament leader isn't gibsonized
-        # the winner group must have at least 2 people
-        $statistical_winner_group_size = 2;
-        for ( my $i = 1 ; $i < scalar @{$sim_tournament_players} ; $i++ ) {
-            if ( $lowest_ranked_players_who_can_finish_in_nth_statistically[$i]
-                != $lowest_ranked_winner )
-            {
-                last;
-            }
-            $statistical_winner_group_size++;
-            $lowest_lockout_rank = $i;
+    for ( my $i = 1 ; $i < scalar @{$sim_tournament_players} ; $i++ ) {
+        if ( $lowest_ranked_players_who_can_finish_in_nth_statistically[$i] !=
+            $lowest_ranked_winner )
+        {
+            last;
         }
+        $contender_group_size++;
     }
 
-    log_info(
-        $config,
-        sprintf(
-            "\nWinner group size: %d (%s)\n",
-            $statistical_winner_group_size,
-            $sim_tournament_players->[$lowest_ranked_winner]->{name}
-        )
-    );
+    log_info( $config,
+        sprintf( "\nContender group size: %d\n", $contender_group_size, ) );
 
-    if (   $statistical_winner_group_size > 1
-        && $statistical_winner_group_size % 2 == 1 )
+    if (   $contender_group_size > 1
+        && $contender_group_size % 2 == 1 )
     {
         # The winner group is odd, we need to bring in someone
         # who is technically not included to even it.
+        my $lowest_lockout_rank = $contender_group_size - 1;
         if ( $lowest_ranked_players_who_can_finish_in_nth_statistically
-            [$lowest_lockout_rank] == $sim_number_of_players - 1 )
+            [$lowest_lockout_rank] != $sim_number_of_players - 1 )
         {
-            log_info( $config, "\nWARNING: cannot expand winner group\n", );
-        }
-        else {
             my $previous_player =
               $lowest_ranked_players_who_can_finish_in_nth_statistically
               [$lowest_lockout_rank];

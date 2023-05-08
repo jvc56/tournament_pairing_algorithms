@@ -1,5 +1,11 @@
 #!/usr/bin/perl
 
+# TODO:
+# Handle removed players
+# Last round KOTH sim?
+# First vs last after gibson?
+# Active control loss based on current round no the based-on round
+
 package TSH::Command::COP;
 
 use strict;

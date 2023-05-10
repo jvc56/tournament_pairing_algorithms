@@ -194,11 +194,13 @@ sub create_cop_config {
 
     return {
         log_filename               => $log_filename,
+        number_of_threads          => 6,
         number_of_sims             => $number_of_sims,
         number_of_rounds           => $final_round,
+        last_paired_round          => $start_round,
         always_wins_number_of_sims => $always_wins_number_of_sims,
         number_of_rounds_remaining => $final_round - $start_round,
-        lowest_ranked_payout       => $lowest_ranked_payout,
+        lowest_ranked_payout       => $lowest_ranked_payout - 1,
         cumulative_gibson_spreads =>
           get_cumulative_gibson_spreads( $gibson_spread, $final_round - 1 ),
         gibson_spreads =>
@@ -376,7 +378,7 @@ sub get_config_for_t_file_round {
 
     return create_cop_config(
         $start_round, $final_round,
-        1000,         1000,
+        100000,       100000,
         $lowest_ranked_payout, [ 300, 250, 200 ],
         [0.25], $final_round - 4,
         [ 0, 0.1, 0.05, 0.01 ], $log_filename

@@ -4,6 +4,7 @@
 # First vs last after gibson?
 # use factor 0.75N for small divisions?
 # pretty print the config
+# last round hopefulness and gibson spreads matter, there was error in config
 
 # DONE:
 # multithreading
@@ -542,7 +543,7 @@ sub config_array_to_string {
     my ($array_ref) = @_;
     my $ret = '[';
     for ( my $i = 0 ; $i < scalar(@$array_ref) ; $i++ ) {
-        $ret .= $array_ref->[$i] . ', ';
+        $ret .= sprintf("%4s", $array_ref->[$i]) . ', ';
     }
     $ret = substr( $ret, 0, -2 );
     $ret .= ']';
@@ -567,6 +568,15 @@ sub config_to_string {
         "Lowest Ranked Cash Payout:",
         $config->{lowest_ranked_payout} + 1 );
     $ret .= sprintf( "%31s %s\n",
+        "Control Loss Activation Round:",
+        $config->{control_loss_activation_round} + 1 );
+    $ret .= sprintf( "%31s %s\n", "Threads:", $config->{number_of_threads} );
+
+    # Write a marker designating which array values are being used
+    # for this round.
+    $ret .= sprintf("%31s %s", '(* denotes values in use)', ('      ' x ($config->{number_of_rounds_remaining} - 1)) . "   *\n");
+    
+    $ret .= sprintf( "%31s %s\n",
         "Cumulative Gibson Spreads:",
         config_array_to_string( $config->{cumulative_gibson_spreads} ) );
     $ret .= sprintf( "%31s %s\n",
@@ -576,11 +586,7 @@ sub config_to_string {
         "Control Loss Thresholds:",
         config_array_to_string( $config->{control_loss_thresholds} ) );
     $ret .= sprintf( "%31s %s\n",
-        "Control Loss Activation Round:",
-        $config->{control_loss_activation_round} + 1 );
-    $ret .= sprintf( "%31s %s\n",
         "Hopefulness:", config_array_to_string( $config->{hopefulness} ) );
-    $ret .= sprintf( "%31s %s\n", "Threads:", $config->{number_of_threads} );
     return $ret;
 }
 
@@ -1343,7 +1349,7 @@ sub sim_factor_pair_worker {
             my $pairings =
               factor_pair( $sim_tournament_players, $remaining_rounds,
                 $lowest_gibson_rank );
-            my $max_spread = $config->{gibson_spreads}->[ -$remaining_rounds ];
+            my $max_spread = $config->{gibson_spreads}->[ $remaining_rounds - 1 ];
             play_round( $pairings, $sim_tournament_players, -1, $max_spread );
         }
         record_tournament_results( $results, $sim_tournament_players );

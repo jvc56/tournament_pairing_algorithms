@@ -538,6 +538,52 @@ sub extend_tsh_config_array {
     return \@full_array;
 }
 
+sub config_array_to_string {
+    my ($array_ref) = @_;
+    my $ret = '[';
+    for ( my $i = 0 ; $i < scalar(@$array_ref) ; $i++ ) {
+        $ret .= $array_ref->[$i] . ', ';
+    }
+    $ret = substr( $ret, 0, -2 );
+    $ret .= ']';
+    return $ret;
+}
+
+sub config_to_string {
+    my ($config) = @_;
+    my $ret = "COP Config:\n\n";
+    $ret .= sprintf( "%31s %s\n", "Log Filename:", $config->{log_filename} );
+    $ret .= sprintf( "%31s %s\n", "Last Paired Round:",
+        $config->{last_paired_round} );
+    $ret .= sprintf( "%31s %s\n", "Rounds:", $config->{number_of_rounds} );
+    $ret .= sprintf( "%31s %s\n",
+        "Rounds Remaining:",
+        $config->{number_of_rounds_remaining} );
+    $ret .= sprintf( "%31s %s\n", "Simulations:", $config->{number_of_sims} );
+    $ret .= sprintf( "%31s %s\n",
+        "Always Wins Simulations:",
+        $config->{always_wins_number_of_sims} );
+    $ret .= sprintf( "%31s %s\n",
+        "Lowest Ranked Cash Payout:",
+        $config->{lowest_ranked_payout} + 1 );
+    $ret .= sprintf( "%31s %s\n",
+        "Cumulative Gibson Spreads:",
+        config_array_to_string( $config->{cumulative_gibson_spreads} ) );
+    $ret .= sprintf( "%31s %s\n",
+        "Gibson Spreads:",
+        config_array_to_string( $config->{gibson_spreads} ) );
+    $ret .= sprintf( "%31s %s\n",
+        "Control Loss Thresholds:",
+        config_array_to_string( $config->{control_loss_thresholds} ) );
+    $ret .= sprintf( "%31s %s\n",
+        "Control Loss Activation Round:",
+        $config->{control_loss_activation_round} + 1 );
+    $ret .= sprintf( "%31s %s\n",
+        "Hopefulness:", config_array_to_string( $config->{hopefulness} ) );
+    $ret .= sprintf( "%31s %s\n", "Threads:", $config->{number_of_threads} );
+    return $ret;
+}
+
 # Pairing and simming
 
 sub cop {
@@ -546,10 +592,7 @@ sub cop {
         $times_played_hash, $previous_pairing_hash
     ) = @_;
 
-    log_info( $config, "\n\nCOP Config:\n\n" . Dumper($config) );
-
-    log_info( $config,
-        "\n\nPrevious Pairing Hash:\n\n" . Dumper($previous_pairing_hash) );
+    log_info( $config, config_to_string($config) );
 
     if ( $config->{number_of_rounds_remaining} <= 0 ) {
         return sprintf( "Invalid rounds remaining: %d\n",

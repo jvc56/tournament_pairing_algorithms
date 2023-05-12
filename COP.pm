@@ -832,6 +832,7 @@ sub cop {
                     (
                            $i <= $lowest_gibson_rank
                         && $j <= $lowest_ranked_player_who_can_cash_absolutely
+                        && $j > $lowest_gibson_rank
                     )
                     || (   $i > $lowest_gibson_rank
                         && $i <= $lowest_ranked_player_who_can_cash_absolutely
@@ -839,6 +840,9 @@ sub cop {
                     )
                   )
                 {
+                    # Gibsonized players should not play anyone in contention
+                    # for a cash payout that isn't also gibsonized.
+
                     # player i needs to paired with the player
                     # immediately after them in the rankings.
                     # If player i has a odd rank, then they have
@@ -1267,17 +1271,14 @@ sub get_lowest_gibson_rank {
       min( $sim_number_of_players, $config->{lowest_ranked_payout} + 1 );
     for (
         my $player_in_nth_rank_index = 0 ;
-
-        # Add 1 to $config->{lowest_ranked_payout} because it is zero-indexed
         $player_in_nth_rank_index < $max_rank ; $player_in_nth_rank_index++
       )
     {
-        if ( $player_in_nth_rank_index == $max_rank - 1 ) {
-
+        if ( $player_in_nth_rank_index == $sim_number_of_players - 1 ) {
             # Somehow, everyone is gibsonized
             # IRL, this should never happen, but for this code
             # it will prevent index out-of-bounds errors.
-            $lowest_gibson_rank = $max_rank - 1;
+            $lowest_gibson_rank = $sim_number_of_players - 1;
             last;
         }
         my $player_in_nth =

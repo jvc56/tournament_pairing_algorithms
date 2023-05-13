@@ -1,12 +1,13 @@
 #!/usr/bin/perl
 
 # TODO:
-# First vs last after gibson?
 # use factor 0.75N for small divisions?
-# pretty print the config
-# last round hopefulness and gibson spreads matter, there was error in config
+# make hopefulness a single config
+# Copy to HTML directory
 
 # DONE:
+# First vs last after gibson?
+# pretty print the config
 # multithreading
 # Last round KOTH sim should account for gibsonizations
 # All players gibsonized for cash payouts
@@ -191,7 +192,7 @@ sub Run ($$@) {
     }
 
     my $number_of_threads = $tournament->Config()->Value('cop_threads');
-    if ( !defined $number_of_threads || $number_of_threads < 1 ) {
+    if ( (!(defined $number_of_threads)) || $number_of_threads < 1 ) {
         my $number_of_threads = 6;
     }
 

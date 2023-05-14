@@ -22,7 +22,7 @@ use strict;
 use warnings;
 use threads;
 
-#use lib '/home/josh/TSH/lib/perl/';
+use lib '/home/josh/TSH/lib/perl/';
 
 use File::Basename;
 use Graph::Matching qw(max_weight_matching);
@@ -557,7 +557,7 @@ sub config_to_string {
     my $ret = "COP Config:\n\n";
     $ret .= sprintf( "%31s %s\n", "Log Filename:", $config->{log_filename} );
     $ret .= sprintf( "%31s %s\n", "Last Paired Round:",
-        $config->{last_paired_round} );
+        $config->{last_paired_round} + 1);
     $ret .= sprintf( "%31s %s\n", "Rounds:", $config->{number_of_rounds} );
     $ret .= sprintf( "%31s %s\n",
         "Rounds Remaining:",

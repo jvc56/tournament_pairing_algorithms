@@ -185,7 +185,7 @@ sub Run ($$@) {
 
     my $number_of_threads = $tournament->Config()->Value('cop_threads');
     if ( (!(defined $number_of_threads)) || $number_of_threads < 1 ) {
-        my $number_of_threads = 6;
+        $number_of_threads = 6;
     }
 
     # Create the special config for cop

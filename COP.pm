@@ -3,7 +3,6 @@
 # TODO:
 # use factor 0.75N for small divisions?
 # make hopefulness a single config
-# Copy to HTML directory
 
 # DONE:
 # First vs last after gibson?
@@ -21,14 +20,20 @@ package TSH::Command::COP;
 use strict;
 use warnings;
 use threads;
+use Data::Dumper;
 
 use lib '/home/josh/TSH/lib/perl/';
 
 use File::Basename;
 use Graph::Matching qw(max_weight_matching);
 use TSH::Command::ShowPairings;
+use TSH::PairingCommand;
+use File::Copy;
 
 our (@ISA) = qw(TSH::PairingCommand);
+
+use constant PROHIBITIVE_WEIGHT => 1000000;
+use constant BYE_PLAYER_ID      => 0;
 
 =pod
 
@@ -127,8 +132,10 @@ sub Run ($$@) {
       . "_round_"
       . $cop_paired_round1
       . "_based_on_$sr1" . ".log";
+    my $html_log_filename =
+      $log_dir . 'html/' . "$division_name$cop_paired_round1" . '_cop.log';
 
-    my $max_round = $dp->MaxRound0();
+    my $number_of_rounds = $dp->MaxRound0() + 1;
 
     # Extract TSH config vars
 
@@ -184,27 +191,31 @@ sub Run ($$@) {
     }
 
     my $number_of_threads = $tournament->Config()->Value('cop_threads');
-    if ( (!(defined $number_of_threads)) || $number_of_threads < 1 ) {
-        $number_of_threads = 6;
+    if ( ( !( defined $number_of_threads ) ) || $number_of_threads < 1 ) {
+        $number_of_threads = 1;
     }
 
     # Create the special config for cop
     my $cop_config = {
         log_filename               => $log_filename,
+        html_log_filename          => $html_log_filename,
         number_of_sims             => $number_of_sims,
         number_of_threads          => $number_of_threads,
-        number_of_rounds           => $max_round + 1,
+        number_of_rounds           => $number_of_rounds,
         last_paired_round          => $last_paired_round0,
         always_wins_number_of_sims => $always_wins_number_of_sims,
-        control_loss_thresholds =>
-          extend_tsh_config_array( $control_loss_thresholds, $max_round ),
+        control_loss_thresholds    => extend_tsh_config_array(
+            $control_loss_thresholds, $number_of_rounds
+        ),
         control_loss_activation_round => $control_loss_activation_round - 1,
-        number_of_rounds_remaining    => $max_round - $sr0,
+        number_of_rounds_remaining    => ( $number_of_rounds - 1 ) - $sr0,
         lowest_ranked_payout          => $lowest_ranked_payout - 1,
         cumulative_gibson_spreads =>
-          get_cumulative_gibson_spreads( $gibson_spread, $max_round ),
-        gibson_spreads => extend_tsh_config_array( $gibson_spread, $max_round ),
-        hopefulness    => extend_tsh_config_array( $hopefulness,   $max_round ),
+          get_cumulative_gibson_spreads( $gibson_spread, $number_of_rounds ),
+        gibson_spreads =>
+          extend_tsh_config_array( $gibson_spread, $number_of_rounds ),
+        hopefulness =>
+          extend_tsh_config_array( $hopefulness, $number_of_rounds ),
     };
 
     my %times_played          = ();
@@ -214,18 +225,19 @@ sub Run ($$@) {
     my @players            = $dp->Players();
     my $number_of_players  = scalar @players;
     my @tournament_players = ();
+    my $player_index       = 0;
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player = $players[$i];
         if ( !$player->Active() ) {
             next;
         }
-        my $player_index = $player->ID() - 1;
+        my $player_id = $player->ID();
         for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
             my $opponent = $players[$j];
             if ( !$opponent->Active() ) {
                 next;
             }
-            my $opponent_index = $opponent->ID() - 1;
+            my $opponent_id = $opponent->ID();
             my $number_of_times_played =
               $player->CountRoundRepeats( $opponent, $last_paired_round0 );
             my $number_of_times_played_excluding_last_round =
@@ -245,7 +257,7 @@ sub Run ($$@) {
                 return 0;
             }
             my $times_played_key =
-              create_times_played_key( $player_index, $opponent_index );
+              create_times_played_key( $player_id, $opponent_id );
             $times_played{$times_played_key} = $number_of_times_played;
             if ( $played_last_round == 1 ) {
                 $previous_pairing_hash{$times_played_key} = 1;
@@ -253,7 +265,7 @@ sub Run ($$@) {
         }
 
         my $times_given_bye_key =
-          create_times_played_key( $player_index, $number_of_players );
+          create_times_played_key( $player_id, BYE_PLAYER_ID );
 
         # Count the byes by up to the based on round
         # (There does not seem to be an existing Player method for this)
@@ -267,20 +279,23 @@ sub Run ($$@) {
         $times_played{$times_given_bye_key} = $byes;
 
         push @tournament_players, new_tournament_player(
+            $player_id,
             $player->PrettyName(), $player_index,
-            $player_index,
 
             # Wins count as 2 and draws count as 1 to
             # keep everything in integers.
             $player->RoundWins($sr0) * 2,
             $player->RoundSpread($sr0), 0
         );
+        $player_index++;
     }
 
-    my $pairings = cop(
+    my $id_pairings = cop(
         $cop_config,    \@tournament_players,
         \%times_played, \%previous_pairing_hash
     );
+
+    print( "id_pairings:\n" . Dumper($id_pairings) );
 
     my $setupp = $this->SetupForPairings(
         'division' => $dp,
@@ -289,23 +304,9 @@ sub Run ($$@) {
 
     my $target0 = $setupp->{'target0'};
 
-    for ( my $i = 0 ; $i < scalar @{$pairings} ; $i++ ) {
-
-        # Convert back to 1-indexed
-        my $player_id   = $i + 1;
-        my $opponent_id = $pairings->[$i] + 1;
-
-        if ( $opponent_id > $number_of_players ) {
-
-            # This is a bye
-            $opponent_id = 0;
-        }
-
-        if ( $player_id > $opponent_id && $opponent_id != 0 ) {
-
-            # We have already made this pairing
-            next;
-        }
+    for ( my $i = 0 ; $i < scalar @{$id_pairings} ; $i++ ) {
+        my $player_id   = $id_pairings->[$i]->[0];
+        my $opponent_id = $id_pairings->[$i]->[1];
         $dp->Pair( $player_id, $opponent_id, $target0, 1 );
     }
 
@@ -328,8 +329,6 @@ round as opposed to the provided based on round.
 
 =cut
 
-use constant PROHIBITIVE_WEIGHT => 1000000;
-
 sub log_info {
     my ( $config, $content ) = @_;
 
@@ -349,6 +348,39 @@ sub log_info {
     print $fh $content;
 
     close($fh);
+}
+
+sub copy_log_to_html_directory {
+    my ($config) = @_;
+
+    if ( !$config->{log_filename} ) {
+        log_info( $config,
+            "Could not copy to html directory: no html log filename specified\n"
+        );
+        return;
+    }
+
+    my $success = copy( $config->{log_filename}, $config->{html_log_filename} );
+    if ( !$success ) {
+        log_info(
+            $config,
+            sprintf(
+                "\nCould not copy %s to %s: %s\n",
+                $config->{log_filename},
+                $config->{html_log_filename}, $!
+            )
+        );
+    }
+    else {
+        log_info(
+            $config,
+            sprintf(
+                "\nSuccessfully copied %s to %s: %s\n",
+                $config->{log_filename},
+                $config->{html_log_filename}, $!
+            )
+        );
+    }
 }
 
 # Create new tournament results
@@ -403,17 +435,11 @@ sub new_player_scores {
 # Tournament players
 
 sub new_tournament_player {
-    my ( $name, $index, $display_index, $wins, $spread, $is_bye ) = @_;
+    my ( $id, $name, $index, $wins, $spread, $is_bye ) = @_;
     my $self = {
+        id    => $id,
         name  => $name,
         index => $index,
-
-        # The display index is the original index of the player
-        # for the full tournament. During simulation, players
-        # need to be reindexed to properly record the results,
-        # but when printing for debugging and human consumption,
-        # should still use the original index to avoid confusion.
-        display_index => $display_index,
 
         # The start_* fields are used to reset the players
         # to their original record when a simulation is finished.
@@ -437,21 +463,12 @@ sub copy_tournament_players {
         my $tournament_player = $tournament_players->[$i];
         push @new_tournament_players,
           new_tournament_player(
-            $tournament_player->{name},          $tournament_player->{index},
-            $tournament_player->{display_index}, $tournament_player->{wins},
-            $tournament_player->{spread},        $tournament_player->{is_bye}
+            $tournament_player->{id},     $tournament_player->{name},
+            $tournament_player->{index},  $tournament_player->{wins},
+            $tournament_player->{spread}, $tournament_player->{is_bye}
           );
     }
     return \@new_tournament_players;
-}
-
-sub copy_config {
-    my ($config) = @_;
-    my %new_config = ();
-    foreach my $key (keys %{$config}) {
-        $new_config{$key} = $config->{$key};
-    }
-    return \%new_config;
 }
 
 sub reset_tournament_player {
@@ -465,8 +482,7 @@ sub add_bye_player {
 
     # This display index can be the same as the original index
     push @{$tournament_players},
-      new_tournament_player( 'BYE', $bye_player_index, $bye_player_index, 0, 0,
-        1 );
+      new_tournament_player( BYE_PLAYER_ID, 'BYE', $bye_player_index, 0, 0, 1 );
 }
 
 # Extract lowest payout rank
@@ -494,13 +510,13 @@ sub get_lowest_ranked_payout {
 # Gibson spread
 
 sub get_cumulative_gibson_spreads {
-    my ( $gibson_spread, $max_round ) = @_;
+    my ( $gibson_spread, $number_of_rounds ) = @_;
 
     my $number_of_gibson_spreads  = scalar @{$gibson_spread};
-    my @cumulative_gibson_spreads = (0) x ( $max_round + 1 );
+    my @cumulative_gibson_spreads = (0) x ($number_of_rounds);
 
     my $last_gibson_spread;
-    for ( my $i = 0 ; $i <= $max_round ; $i++ ) {
+    for ( my $i = 0 ; $i < $number_of_rounds ; $i++ ) {
         if ( $i == 0 ) {
             $cumulative_gibson_spreads[$i] = $gibson_spread->[$i] * 2;
             $last_gibson_spread = $gibson_spread->[$i] * 2;
@@ -523,13 +539,13 @@ sub get_cumulative_gibson_spreads {
 # Control loss
 
 sub extend_tsh_config_array {
-    my ( $array, $max_round ) = @_;
+    my ( $array, $number_of_rounds ) = @_;
 
     my $number_of_entries = scalar @{$array};
-    my @full_array        = (0) x ( $max_round + 1 );
+    my @full_array        = (0) x ($number_of_rounds);
 
     my $last_entry;
-    for ( my $i = 0 ; $i <= $max_round ; $i++ ) {
+    for ( my $i = 0 ; $i < $number_of_rounds ; $i++ ) {
         if ( $i < $number_of_entries ) {
             $full_array[$i] = $array->[$i];
             $last_entry = $array->[$i];
@@ -545,7 +561,7 @@ sub config_array_to_string {
     my ($array_ref) = @_;
     my $ret = '[';
     for ( my $i = 0 ; $i < scalar(@$array_ref) ; $i++ ) {
-        $ret .= sprintf("%4s", $array_ref->[$i]) . ', ';
+        $ret .= sprintf( "%4s", $array_ref->[$i] ) . ', ';
     }
     $ret = substr( $ret, 0, -2 );
     $ret .= ']';
@@ -556,8 +572,9 @@ sub config_to_string {
     my ($config) = @_;
     my $ret = "COP Config:\n\n";
     $ret .= sprintf( "%31s %s\n", "Log Filename:", $config->{log_filename} );
-    $ret .= sprintf( "%31s %s\n", "Last Paired Round:",
-        $config->{last_paired_round} + 1);
+    $ret .= sprintf( "%31s %s\n",
+        "Last Paired Round:",
+        $config->{last_paired_round} + 1 );
     $ret .= sprintf( "%31s %s\n", "Rounds:", $config->{number_of_rounds} );
     $ret .= sprintf( "%31s %s\n",
         "Rounds Remaining:",
@@ -576,8 +593,11 @@ sub config_to_string {
 
     # Write a marker designating which array values are being used
     # for this round.
-    $ret .= sprintf("%31s %s", '(* denotes values in use)', ('      ' x ($config->{number_of_rounds_remaining} - 1)) . "   *\n");
-    
+    $ret .= sprintf( "%31s %s",
+        '(* denotes values in use)',
+        ( '      ' x ( $config->{number_of_rounds_remaining} - 1 ) )
+          . "   *\n" );
+
     $ret .= sprintf( "%31s %s\n",
         "Cumulative Gibson Spreads:",
         config_array_to_string( $config->{cumulative_gibson_spreads} ) );
@@ -634,8 +654,7 @@ sub cop {
       get_lowest_gibson_rank( $config, $sim_tournament_players );
 
     my $factor_pair_results =
-      sim_factor_pair_manager( $config, $sim_tournament_players,
-        $lowest_gibson_rank );
+      sim_factor_pair( $config, $sim_tournament_players, $lowest_gibson_rank );
 
     my $lowest_ranked_always_wins = -1;
     my $control_loss              = -1;
@@ -752,21 +771,21 @@ sub cop {
         for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
             my $player_j = $tournament_players->[$j];
             my $number_of_times_played =
-              get_number_of_times_played( $player_i->{index},
-                $player_j->{index}, $times_played_hash );
+              get_number_of_times_played( $player_i->{id},
+                $player_j->{id}, $times_played_hash );
 
-            if ( !exists $number_of_repeats{ $player_i->{index} } ) {
-                $number_of_repeats{ $player_i->{index} } = 0;
+            if ( !exists $number_of_repeats{ $player_i->{id} } ) {
+                $number_of_repeats{ $player_i->{id} } = 0;
             }
 
-            if ( !exists $number_of_repeats{ $player_j->{index} } ) {
-                $number_of_repeats{ $player_j->{index} } = 0;
+            if ( !exists $number_of_repeats{ $player_j->{id} } ) {
+                $number_of_repeats{ $player_j->{id} } = 0;
             }
 
             if ( $number_of_times_played > 1 ) {
                 my $repeats = $number_of_times_played - 1;
-                $number_of_repeats{ $player_i->{index} } += $repeats;
-                $number_of_repeats{ $player_j->{index} } += $repeats;
+                $number_of_repeats{ $player_i->{id} } += $repeats;
+                $number_of_repeats{ $player_j->{id} } += $repeats;
             }
         }
     }
@@ -790,14 +809,14 @@ sub cop {
               && $j > $lowest_ranked_player_who_can_cash_absolutely;
 
             my $number_of_times_played =
-              get_number_of_times_played( $player_i->{index},
-                $player_j->{index}, $times_played_hash );
+              get_number_of_times_played( $player_i->{id},
+                $player_j->{id}, $times_played_hash );
 
             my $repeat_weight = int( ( $number_of_times_played * 2 ) *
                   ( ( $number_of_players / 3 )**3 ) );
 
             my $times_played_key =
-              create_times_played_key( $player_i->{index}, $player_j->{index} );
+              create_times_played_key( $player_i->{id}, $player_j->{id} );
             if (   $both_cannot_get_payout
                 && $previous_pairing_hash->{$times_played_key} )
             {
@@ -805,8 +824,8 @@ sub cop {
                 $repeat_weight += ( PROHIBITIVE_WEIGHT / 10 );
             }
             elsif ( $number_of_times_played > 0 ) {
-                $repeat_weight += ( $number_of_repeats{ $player_i->{index} } +
-                      $number_of_repeats{ $player_j->{index} } ) * 2;
+                $repeat_weight += ( $number_of_repeats{ $player_i->{id} } +
+                      $number_of_repeats{ $player_j->{id} } ) * 2;
             }
 
             my $rank_difference_weight;
@@ -979,11 +998,8 @@ sub cop {
                     $koth_weight
                 )
             );
-            $weight_hash{
-                create_weight_hash_key(
-                    $player_i->{index}, $player_j->{index}
-                )
-            } = $weight;
+            $weight_hash{ create_weight_hash_key( $player_i->{id},
+                    $player_j->{id} ) } = $weight;
             push @edges, [ $i, $j, $weight ];
         }
     }
@@ -996,20 +1012,23 @@ sub cop {
 
     my $weight_sum = 0;
     for ( my $i = 0 ; $i < scalar @{$pairings} ; $i++ ) {
-        my $j = $pairings->[$i];
+        my $j        = $pairings->[$i];
+        my $player_i = $tournament_players->[$i];
+        my $player_j = $tournament_players->[$j];
 
         # Use $j == -1 to detect the index of the bye player
         if ( $i < $j || $j == -1 ) {
-            my $weight_hash_key = create_weight_hash_key( $i, $j );
-            my $pairing_weight  = $weight_hash{$weight_hash_key};
+            my $weight_hash_key =
+              create_weight_hash_key( $player_i->{id}, $player_j->{id} );
+            my $pairing_weight = $weight_hash{$weight_hash_key};
             if ( $pairing_weight > PROHIBITIVE_WEIGHT ) {
                 log_info(
                     $config,
                     sprintf(
 "WARNING: Pairing exceeds prohibitive weight (%d): %s vs %s\n",
                         $pairing_weight,
-                        player_string( $tournament_players->[$i], $i ),
-                        player_string( $tournament_players->[$j], $j )
+                        player_string( $player_i, $i ),
+                        player_string( $player_j, $j )
                     )
                 );
             }
@@ -1024,20 +1043,24 @@ sub cop {
 
     log_info( $config,
         pairings_string( $tournament_players, $pairings, $times_played_hash ) );
-    return $pairings;
+
+    my $id_pairings =
+      convert_pairings_to_id_pairings( $tournament_players, $pairings );
+
+    copy_log_to_html_directory($config);
+
+    return $id_pairings;
 }
 
 sub create_weight_hash_key {
-
-    # It is assumed that $i < $j
     my ( $i, $j ) = @_;
     return create_times_played_key( $i, $j );
 }
 
 sub get_number_of_times_played {
-    my ( $player_i_index, $player_j_index, $times_played_hash ) = @_;
+    my ( $player_i_id, $player_j_id, $times_played_hash ) = @_;
     my $times_played_key =
-      create_times_played_key( $player_i_index, $player_j_index );
+      create_times_played_key( $player_i_id, $player_j_id );
     my $number_of_times_played = 0;
     if ( exists $times_played_hash->{$times_played_key} ) {
         $number_of_times_played = $times_played_hash->{$times_played_key};
@@ -1200,7 +1223,7 @@ sub get_control_loss {
     my $sim_number_of_players = scalar @{$sim_tournament_players};
 
     my ( $always_wins_pair_player_with_first, $always_wins_factor_pair ) =
-      sim_player_always_wins_manager( $config, $sim_tournament_players );
+      sim_player_always_wins( $config, $sim_tournament_players );
 
     my $lowest_ranked_always_wins = 0;
     for ( my $i = 0 ;
@@ -1273,10 +1296,12 @@ sub get_lowest_gibson_rank {
       min( $sim_number_of_players, $config->{lowest_ranked_payout} + 1 );
     for (
         my $player_in_nth_rank_index = 0 ;
-        $player_in_nth_rank_index < $max_rank ; $player_in_nth_rank_index++
+        $player_in_nth_rank_index < $max_rank ;
+        $player_in_nth_rank_index++
       )
     {
         if ( $player_in_nth_rank_index == $sim_number_of_players - 1 ) {
+
             # Somehow, everyone is gibsonized
             # IRL, this should never happen, but for this code
             # it will prevent index out-of-bounds errors.
@@ -1315,7 +1340,7 @@ sub get_sim_tournament_players {
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player = $tournament_players->[$i];
 
-        # # Divide wins by 2 because wins are worth 2 and draws are worth 1
+        # Divide wins by 2 because wins are worth 2 and draws are worth 1
         my $can_technically_cash = $i <= $config->{lowest_ranked_payout}
           || (
             $tournament_players->[ $config->{lowest_ranked_payout} ]->{wins} -
@@ -1327,8 +1352,7 @@ sub get_sim_tournament_players {
             # This index is used to record the simmed players final
             # rank when a simulation is finished.
             push @sim_tournament_players,
-              new_tournament_player( $player->{name}, $i,
-                $player->{display_index},
+              new_tournament_player( $player->{id}, $player->{name}, $i,
                 $player->{wins}, $player->{spread}, $player->{is_bye} );
         }
         if ( !$can_technically_cash ) {
@@ -1348,6 +1372,34 @@ sub get_number_of_sims_for_thread {
     return $thread_number_of_sims;
 }
 
+sub sim_factor_pair_worker {
+    my ( $config, $sim_tournament_players, $lowest_gibson_rank,
+        $number_of_sims ) = @_;
+    my $results = new_tournament_results( scalar(@$sim_tournament_players) );
+    for ( my $i = 0 ; $i < $number_of_sims ; $i++ ) {
+        for (
+            my $remaining_rounds = $config->{number_of_rounds_remaining} ;
+            $remaining_rounds >= 1 ;
+            $remaining_rounds--
+          )
+        {
+            my $pairings =
+              factor_pair( $sim_tournament_players, $remaining_rounds,
+                $lowest_gibson_rank );
+            my $max_spread =
+              $config->{gibson_spreads}->[ $remaining_rounds - 1 ];
+            play_round( $pairings, $sim_tournament_players, -1, $max_spread );
+        }
+        record_tournament_results( $results, $sim_tournament_players );
+
+        foreach my $player (@$sim_tournament_players) {
+            reset_tournament_player($player);
+        }
+        sort_tournament_players_by_record($sim_tournament_players);
+    }
+    return $results;
+}
+
 sub sim_factor_pair_manager {
     my ( $config, $sim_tournament_players, $lowest_gibson_rank ) = @_;
 
@@ -1361,38 +1413,10 @@ sub sim_factor_pair_manager {
             $config->{number_of_threads}, $i );
         my $copied_tournament_players =
           copy_tournament_players($sim_tournament_players);
-        my $copied_config = copy_config($config);
         push @threads,
           threads->create(
-            sub {
-                my ( $config, $sim_tournament_players, $lowest_gibson_rank,
-                    $number_of_sims ) = @_;
-                my $results = new_tournament_results( scalar(@$sim_tournament_players) );
-                for ( my $i = 0 ; $i < $number_of_sims ; $i++ ) {
-                    for (
-                        my $remaining_rounds = $config->{number_of_rounds_remaining} ;
-                        $remaining_rounds >= 1 ;
-                        $remaining_rounds--
-                    )
-                    {
-                        my $pairings =
-                        factor_pair( $sim_tournament_players, $remaining_rounds,
-                            $lowest_gibson_rank );
-                        my $max_spread = $config->{gibson_spreads}->[ $remaining_rounds - 1 ];
-                        play_round( $pairings, $sim_tournament_players, -1, $max_spread );
-                    }
-                    record_tournament_results( $results, $sim_tournament_players );
-
-                    foreach my $player (@$sim_tournament_players) {
-                        reset_tournament_player($player);
-                    }
-                    sort_tournament_players_by_record($sim_tournament_players);
-                }
-                return $results;
-            },
-            $copied_config,
-            $copied_tournament_players,
-            $lowest_gibson_rank,
+            \&sim_factor_pair_worker,   $config,
+            $copied_tournament_players, $lowest_gibson_rank,
             $number_of_sims_for_thread
           );
     }
@@ -1417,7 +1441,132 @@ sub sim_factor_pair_manager {
     return $factor_pair_results;
 }
 
+sub sim_factor_pair {
+    my ( $config, $sim_tournament_players, $lowest_gibson_rank ) = @_;
+    if ( $config->{number_of_threads} > 1 ) {
+        log_info(
+            $config,
+            sprintf( "Multithreading factor pair with %d threads\n",
+                $config->{number_of_threads} )
+        );
+        return sim_factor_pair_manager( $config, $sim_tournament_players,
+            $lowest_gibson_rank );
+    }
+    else {
+        log_info( $config, sprintf("Single threading factor pair\n") );
+        return sim_factor_pair_worker(
+            $config,             $sim_tournament_players,
+            $lowest_gibson_rank, $config->{number_of_sims}
+        );
+    }
+}
+
+sub sim_player_always_wins_worker {
+    my (
+        $config,              $sim_tournament_players,
+        $player_in_nth_index, $number_of_sims_for_thread
+    ) = @_;
+    my $pwf_wins = 0;
+    my $fp_wins  = 0;
+    for ( my $i = 0 ; $i < $number_of_sims_for_thread ; $i++ ) {
+        for (
+            my $remaining_rounds = $config->{number_of_rounds_remaining} ;
+            $remaining_rounds >= 1 ;
+            $remaining_rounds--
+          )
+        {
+            my %player_index_to_rank =
+              map { $sim_tournament_players->[$_]->{index} => $_ }
+              0 .. scalar(@$sim_tournament_players) - 1;
+            my $pairings = factor_pair_minus_player(
+                $sim_tournament_players, $remaining_rounds,
+                $player_in_nth_index,    \%player_index_to_rank
+            );
+            my $max_spread = $config->{gibson_spreads}->[ -$remaining_rounds ];
+            play_round( $pairings, $sim_tournament_players,
+                $player_index_to_rank{$player_in_nth_index}, $max_spread );
+
+            if ( $sim_tournament_players->[0]->{index} == $player_in_nth_index )
+            {
+                $pwf_wins++;
+                last;
+            }
+        }
+
+        for my $player (@$sim_tournament_players) {
+            reset_tournament_player($player);
+        }
+
+        sort_tournament_players_by_record($sim_tournament_players);
+
+        for (
+            my $remaining_rounds = $config->{number_of_rounds_remaining} ;
+            $remaining_rounds >= 1 ;
+            $remaining_rounds--
+          )
+        {
+            my %player_index_to_rank =
+              map { $sim_tournament_players->[$_]->{index} => $_ }
+              0 .. scalar(@$sim_tournament_players) - 1;
+            my $pairings =
+              factor_pair( $sim_tournament_players, $remaining_rounds, -1 );
+            my $max_spread = $config->{gibson_spreads}->[ -$remaining_rounds ];
+            play_round( $pairings, $sim_tournament_players,
+                $player_index_to_rank{$player_in_nth_index}, $max_spread );
+
+            if ( $sim_tournament_players->[0]->{index} == $player_in_nth_index )
+            {
+                $fp_wins++;
+                last;
+            }
+        }
+
+        for my $player (@$sim_tournament_players) {
+            reset_tournament_player($player);
+        }
+
+        sort_tournament_players_by_record($sim_tournament_players);
+    }
+    return $pwf_wins, $fp_wins;
+}
+
 sub sim_player_always_wins_manager {
+    my ( $config, $sim_tournament_players, $player_in_nth_index ) = @_;
+
+    # Create an array to hold the thread objects
+    my @threads = ();
+
+    # Create the threads
+    for ( my $i = 0 ; $i < $config->{number_of_threads} ; $i++ ) {
+        my $number_of_sims_for_thread =
+          get_number_of_sims_for_thread( $config->{always_wins_number_of_sims},
+            $config->{number_of_threads}, $i );
+        my $copied_sim_tournament_players =
+          copy_tournament_players($sim_tournament_players);
+        push @threads,
+          threads->create(
+            \&sim_player_always_wins_worker, $config,
+            $copied_sim_tournament_players,  $player_in_nth_index,
+            $number_of_sims_for_thread
+          );
+    }
+
+    my $factor_pair_results =
+      new_tournament_results( scalar(@$sim_tournament_players) );
+
+    my $pwf_wins = 0;
+    my $fp_wins  = 0;
+
+    # Wait for the threads to finish and collect the results
+    foreach my $thread (@threads) {
+        my ( $thread_pwf_wins, $thread_fp_wins ) = $thread->join();
+        $pwf_wins += $thread_pwf_wins;
+        $fp_wins  += $thread_fp_wins;
+    }
+    return $pwf_wins, $fp_wins;
+}
+
+sub sim_player_always_wins {
     my ( $config, $sim_tournament_players ) = @_;
 
     my @pair_with_first_tournament_wins;
@@ -1455,105 +1604,31 @@ sub sim_player_always_wins_manager {
 
         my $player_in_nth_index = $player_in_nth->{index};
 
-        # Create an array to hold the thread objects
-        my @threads = ();
+        my $pwf_wins;
+        my $fp_wins;
 
-        # Create the threads
-        for ( my $i = 0 ; $i < $config->{number_of_threads} ; $i++ ) {
-            my $number_of_sims_for_thread =
-              get_number_of_sims_for_thread( $config->{number_of_sims},
-                $config->{number_of_threads}, $i );
-            my $copied_sim_tournament_players =
-              copy_tournament_players($sim_tournament_players);
-            my $copied_config = copy_config($config);
-            push @threads,
-              threads->create(
-                sub {
-                    my (
-                        $config,              $sim_tournament_players,
-                        $player_in_nth_index, $number_of_sims_for_thread
-                    ) = @_;
-                    my $pwf_wins = 0;
-                    my $fp_wins  = 0;
-                    for ( my $i = 0 ; $i < $number_of_sims_for_thread ; $i++ ) {
-                        for (
-                            my $remaining_rounds = $config->{number_of_rounds_remaining} ;
-                            $remaining_rounds >= 1 ;
-                            $remaining_rounds--
-                        )
-                        {
-                            my %player_index_to_rank =
-                            map { $sim_tournament_players->[$_]->{index} => $_ }
-                            0 .. scalar(@$sim_tournament_players) - 1;
-                            my $pairings = factor_pair_minus_player(
-                                $sim_tournament_players, $remaining_rounds,
-                                $player_in_nth_index,    \%player_index_to_rank
-                            );
-                            my $max_spread = $config->{gibson_spreads}->[ -$remaining_rounds ];
-                            play_round( $pairings, $sim_tournament_players,
-                                $player_index_to_rank{$player_in_nth_index}, $max_spread );
-
-                            if ( $sim_tournament_players->[0]->{index} == $player_in_nth_index )
-                            {
-                                $pwf_wins++;
-                                last;
-                            }
-                        }
-
-                        for my $player (@$sim_tournament_players) {
-                            reset_tournament_player($player);
-                        }
-
-                        sort_tournament_players_by_record($sim_tournament_players);
-
-                        for (
-                            my $remaining_rounds = $config->{number_of_rounds_remaining} ;
-                            $remaining_rounds >= 1 ;
-                            $remaining_rounds--
-                        )
-                        {
-                            my %player_index_to_rank =
-                            map { $sim_tournament_players->[$_]->{index} => $_ }
-                            0 .. scalar(@$sim_tournament_players) - 1;
-                            my $pairings =
-                            factor_pair( $sim_tournament_players, $remaining_rounds, -1 );
-                            my $max_spread = $config->{gibson_spreads}->[ -$remaining_rounds ];
-                            play_round( $pairings, $sim_tournament_players,
-                                $player_index_to_rank{$player_in_nth_index}, $max_spread );
-
-                            if ( $sim_tournament_players->[0]->{index} == $player_in_nth_index )
-                            {
-                                $fp_wins++;
-                                last;
-                            }
-                        }
-
-                        for my $player (@$sim_tournament_players) {
-                            reset_tournament_player($player);
-                        }
-
-                        sort_tournament_players_by_record($sim_tournament_players);
-                    }
-                    return $pwf_wins, $fp_wins;
-                },
-                $copied_config,
-                $copied_sim_tournament_players,
-                $player_in_nth_index,
-                $number_of_sims_for_thread
-              );
+        if ( $config->{number_of_threads} > 1 ) {
+            if ( $player_in_nth_rank_index == 1 ) {
+                log_info(
+                    $config,
+                    sprintf(
+"Multithreading always wins factor pair with %d threads\n",
+                        $config->{number_of_threads},
+                    )
+                );
+            }
+            ( $pwf_wins, $fp_wins ) =
+              sim_player_always_wins_manager( $config, $sim_tournament_players,
+                $player_in_nth_index );
         }
-
-        my $factor_pair_results =
-          new_tournament_results( scalar(@$sim_tournament_players) );
-
-        my $pwf_wins = 0;
-        my $fp_wins  = 0;
-
-        # Wait for the threads to finish and collect the results
-        foreach my $thread (@threads) {
-            my ( $thread_pwf_wins, $thread_fp_wins ) = $thread->join();
-            $pwf_wins += $thread_pwf_wins;
-            $fp_wins  += $thread_fp_wins;
+        else {
+            if ( $player_in_nth_rank_index == 1 ) {
+                log_info( $config,
+                    "Single threading always wins factor pair\n" );
+            }
+            ( $pwf_wins, $fp_wins ) =
+              sim_player_always_wins_worker( $config, $sim_tournament_players,
+                $player_in_nth_index, $config->{always_wins_number_of_sims} );
         }
 
         push @pair_with_first_tournament_wins, $pwf_wins;
@@ -1564,11 +1639,14 @@ sub sim_player_always_wins_manager {
 
 sub play_round {
     my ( $pairings, $tournament_players, $forced_win_player, $max_spread ) = @_;
-
   outer: for ( my $i = 0 ; $i < scalar @$pairings ; $i++ ) {
         my $pairing = $pairings->[$i];
         for ( my $j = 0 ; $j < 2 ; $j++ ) {
-            if ( $tournament_players->[ $pairing->[$j] ]->{is_bye} ) {
+            my $yeet = $pairing->[$j];
+            if ( !defined $yeet || ref($yeet) eq 'HASH' ) {
+                print( Dumper($pairings) );
+            }
+            if ( $tournament_players->[$yeet]->{is_bye} ) {
 
                 # Player gets a bye
                 $tournament_players->[ $pairing->[ 1 - $j ] ]->{spread} += 50;
@@ -1607,7 +1685,7 @@ sub play_round {
 sub create_times_played_key {
     my ( $p1, $p2 ) = @_;
     my ( $a, $b ) = ( $p1, $p2 );
-    if ( $b < $a ) {
+    if ( $b lt $a ) {
         ( $a, $b ) = ( $p2, $p1 );
     }
     return "$a:$b";
@@ -1757,13 +1835,52 @@ sub convert_matching_to_index_pairings {
     return \@pairings;
 }
 
+sub convert_pairings_to_id_pairings {
+    my ( $tournament_players, $pairings ) = @_;
+    my $number_of_players = scalar @{$tournament_players};
+    my @id_pairings       = ();
+    for ( my $i = 0 ; $i < scalar @{$pairings} ; $i++ ) {
+        my $player_index   = $i;
+        my $opponent_index = $pairings->[$i];
+
+        my $player_id;
+        my $opponent_id;
+
+        if ( $player_index >= $number_of_players ) {
+
+            # This is a bye
+            $player_id = BYE_PLAYER_ID;
+        }
+        else {
+            $player_id = $tournament_players->[$player_index]->{id};
+        }
+
+        if ( $opponent_index >= $number_of_players ) {
+
+            # This is a bye
+            $opponent_id = BYE_PLAYER_ID;
+        }
+        else {
+            $opponent_id = $tournament_players->[$opponent_index]->{id};
+        }
+
+        if (   $player_index > $opponent_index
+            && $opponent_index != BYE_PLAYER_ID )
+        {
+            # We have already made this pairing
+            next;
+        }
+        push @id_pairings, [ $player_id, $opponent_id ];
+    }
+    return \@id_pairings;
+}
+
 # For logging only
 
 sub player_string {
     my ( $player, $rank_index ) = @_;
-    my $name_and_index = sprintf( "%-6s %-22s",
-        '(#' . ( $player->{display_index} + 1 ) . ')',
-        $player->{name} );
+    my $name_and_index =
+      sprintf( "%-6s %-23s", '(#' . ( $player->{id} ) . ')', $player->{name} );
     my $wins_string = sprintf( "%0.1f", $player->{wins} / 2 );
     my $sign        = '+';
     if ( $player->{spread} < 0 ) {
@@ -1836,8 +1953,12 @@ sub pairings_string {
         if ( $player_index > $opponent_index ) {
             next;
         }
+        my $opponent_id = BYE_PLAYER_ID;
+        if ( $opponent_index < $number_of_players ) {
+            $opponent_id = $tournament_players->[$opponent_index]->{id};
+        }
         my $number_of_times_played =
-          get_number_of_times_played( $player_index, $opponent_index,
+          get_number_of_times_played( $player->{id}, $opponent_id,
             $times_played_hash );
         if ( $opponent_index == $number_of_players ) {
             $result .= sprintf(

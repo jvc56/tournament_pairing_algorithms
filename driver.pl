@@ -12,9 +12,10 @@ require "./COP.pm";
 
 # Parsing the t file
 
-use constant LOG_DIRECTORY       => 'logs';
-use constant TEST_DATA_DIRECTORY => 'test_data';
-use constant TSH_CONFIG_FILENAME => 'config.tsh';
+use constant LOG_DIRECTORY        => 'logs';
+use constant TEST_DATA_DIRECTORY  => 'test_data';
+use constant TSH_CONFIG_FILENAME  => 'config.tsh';
+use constant DRIVER_BYE_PLAYER_ID => 0;
 
 sub players_scores_from_tfile {
     my ( $tfile, $start_round ) = @_;
@@ -158,8 +159,8 @@ sub tournament_players_from_players_scores {
         }
 
         push @tournament_players,
-          new_tournament_player( $pscores->{name}, $pscores->{index},
-            $pscores->{index}, $wins, $spread, 0 );
+          new_tournament_player( $pscores->{index} + 1,
+            $pscores->{name}, $pscores->{index}, $wins, $spread, 0 );
     }
 
     for my $times_played_key ( keys %times_played_hash ) {
@@ -194,59 +195,27 @@ sub create_cop_config {
 
     return {
         log_filename               => $log_filename,
-        number_of_threads          => 6,
+        html_log_filename          => $log_filename . '.html',
+        number_of_threads          => 1,
         number_of_sims             => $number_of_sims,
         number_of_rounds           => $final_round,
-        last_paired_round          => $start_round,
+        last_paired_round          => $start_round - 1,
         always_wins_number_of_sims => $always_wins_number_of_sims,
         number_of_rounds_remaining => $final_round - $start_round,
         lowest_ranked_payout       => $lowest_ranked_payout - 1,
         cumulative_gibson_spreads =>
-          get_cumulative_gibson_spreads( $gibson_spread, $final_round - 1 ),
+          get_cumulative_gibson_spreads( $gibson_spread, $final_round ),
         gibson_spreads =>
-          extend_tsh_config_array( $gibson_spread, $final_round - 1 ),
+          extend_tsh_config_array( $gibson_spread, $final_round ),
         control_loss_thresholds =>
-          extend_tsh_config_array( $control_loss_thresholds, $final_round - 1 ),
+          extend_tsh_config_array( $control_loss_thresholds, $final_round ),
         control_loss_activation_round => $control_loss_activation_round,
-        hopefulness =>
-          extend_tsh_config_array( $hopefulness, $final_round - 1 ),
+        hopefulness => extend_tsh_config_array( $hopefulness, $final_round ),
     };
 }
 
 sub get_pairings {
     my ( $filename, $config, $start_round ) = @_;
-
-    my ( $tournament_players, $times_played_hash, $previous_pairing_hash ) =
-      tournament_players_from_tfile( $filename, $start_round );
-
-    if ( !defined $times_played_hash ) {
-        return $tournament_players;
-    }
-
-    return cop(
-        $config,            $tournament_players,
-        $times_played_hash, $previous_pairing_hash
-    );
-}
-
-sub create_cop_config_and_get_pairings {
-    my (
-        $start_round,             $final_round,
-        $number_of_sims,          $always_wins_number_of_sims,
-        $lowest_ranked_payout,    $gibson_spreads,
-        $control_loss_thresholds, $control_loss_activation_round,
-        $hopefulness,             $log_filename,
-        $filename
-    ) = @_;
-
-    # Test cases for cop
-    my $config = create_cop_config(
-        $start_round,             $final_round,
-        $number_of_sims,          $always_wins_number_of_sims,
-        $lowest_ranked_payout,    $gibson_spreads,
-        $control_loss_thresholds, $control_loss_activation_round,
-        $hopefulness,             $log_filename
-    );
 
     my ( $tournament_players, $times_played_hash, $previous_pairing_hash ) =
       tournament_players_from_tfile( $filename, $start_round );
@@ -378,7 +347,7 @@ sub get_config_for_t_file_round {
 
     return create_cop_config(
         $start_round, $final_round,
-        1000,         1000,
+        6,            6,
         $lowest_ranked_payout, [ 300, 250, 200 ],
         [0.25], $final_round - 4,
         [ 0, 0.1, 0.05, 0.01 ], $log_filename
@@ -438,17 +407,18 @@ sub test_t_file_play_round {
 
     # We must add a bye player for the play_round subroutine to work
     my $number_of_players = scalar @{$tournament_players};
+    my $bye_index         = $number_of_players;
     if ( $number_of_players % 2 == 1 ) {
         add_bye_player( $tournament_players, $number_of_players );
-        $number_of_players = scalar {@$tournament_players};
+        $number_of_players = scalar @{$tournament_players};
     }
 
-    sort_tournament_players_by_record($tournament_players);
-    my %index_to_rank = ();
-    for ( my $i = 0 ; $i < scalar @{$tournament_players} ; $i++ ) {
-        $index_to_rank{ $tournament_players->[$i]->{index} } = $i;
-    }
     sort_tournament_players_by_index($tournament_players);
+    my %id_to_index = ();
+    for ( my $i = 0 ; $i < scalar @{$tournament_players} ; $i++ ) {
+        $id_to_index{ $tournament_players->[$i]->{id} } =
+          $tournament_players->[$i]->{index};
+    }
 
     # Reset the previous pairing hash
     foreach my $key ( keys %{$previous_pairing_hash} ) {
@@ -457,17 +427,15 @@ sub test_t_file_play_round {
 
     my @index_pairs = ();
     for ( my $i = 0 ; $i < scalar @{$pairings} ; $i++ ) {
-        my $j = $pairings->[$i];
-        if ( $i < $j || $j == -1 ) {
-            my $player_i_index = $i;
-            my $player_j_index = $number_of_players - 1;
-            if ( $j != -1 ) {
-                $player_j_index = $j;
-            }
-
+        my $player_id   = $pairings->[$i]->[0];
+        my $opponent_id = $pairings->[$i]->[1];
+        if (   $player_id < $opponent_id
+            || $player_id == DRIVER_BYE_PLAYER_ID
+            || $opponent_id == DRIVER_BYE_PLAYER_ID )
+        {
             # Update the times played hash here
             my $times_played_key =
-              create_times_played_key( $player_i_index, $player_j_index );
+              create_times_played_key( $player_id, $opponent_id );
 
             if ( exists $times_played_hash->{$times_played_key} ) {
                 $times_played_hash->{$times_played_key}++;
@@ -478,7 +446,15 @@ sub test_t_file_play_round {
 
             $previous_pairing_hash->{$times_played_key} = 1;
 
-            push @index_pairs, [ $player_i_index, $player_j_index ];
+            my $player_index   = $id_to_index{$player_id};
+            my $opponent_index = $id_to_index{$opponent_id};
+            if ( !defined $player_index ) {
+                $player_index = $bye_index;
+            }
+            if ( !defined $opponent_index ) {
+                $opponent_index = $bye_index;
+            }
+            push @index_pairs, [ $player_index, $opponent_index ];
         }
     }
     play_round( \@index_pairs, $tournament_players, -1, $max_spread );

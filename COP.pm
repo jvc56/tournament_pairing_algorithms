@@ -295,8 +295,6 @@ sub Run ($$@) {
         \%times_played, \%previous_pairing_hash
     );
 
-    print( "id_pairings:\n" . Dumper($id_pairings) );
-
     my $setupp = $this->SetupForPairings(
         'division' => $dp,
         'source0'  => $sr0
@@ -1642,11 +1640,7 @@ sub play_round {
   outer: for ( my $i = 0 ; $i < scalar @$pairings ; $i++ ) {
         my $pairing = $pairings->[$i];
         for ( my $j = 0 ; $j < 2 ; $j++ ) {
-            my $yeet = $pairing->[$j];
-            if ( !defined $yeet || ref($yeet) eq 'HASH' ) {
-                print( Dumper($pairings) );
-            }
-            if ( $tournament_players->[$yeet]->{is_bye} ) {
+            if ( $tournament_players->[$pairing->[$j]]->{is_bye} ) {
 
                 # Player gets a bye
                 $tournament_players->[ $pairing->[ 1 - $j ] ]->{spread} += 50;

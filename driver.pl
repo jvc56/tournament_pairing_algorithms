@@ -8,6 +8,8 @@ use warnings;
 use Getopt::Long;
 use LWP::Simple;
 
+use lib '/home/josh/TSH/lib/perl/';
+
 require "./COP.pm";
 
 # Parsing the t file

@@ -22,8 +22,6 @@ use warnings;
 use threads;
 use Data::Dumper;
 
-use lib '/home/josh/TSH/lib/perl/';
-
 use File::Basename;
 use Graph::Matching qw(max_weight_matching);
 use TSH::Command::ShowPairings;
@@ -126,6 +124,14 @@ sub Run ($$@) {
     #  0-index to 1-index for humans, and
     #  TSH pairs the next available round
     my $cop_paired_round1 = $last_paired_round0 + 2;
+    my $number_of_rounds  = $dp->MaxRound0() + 1;
+
+    if ( $cop_paired_round1 > $number_of_rounds ) {
+        $tournament->TellUser( 'ebigrd', $cop_paired_round1,
+            $number_of_rounds );
+        return 0;
+    }
+
     my $log_filename =
         "$log_dir$timestamp"
       . "_$division_name"
@@ -133,9 +139,7 @@ sub Run ($$@) {
       . $cop_paired_round1
       . "_based_on_$sr1" . ".log";
     my $html_log_filename =
-      $log_dir . 'html/' . "$division_name$cop_paired_round1" . '_cop.log';
-
-    my $number_of_rounds = $dp->MaxRound0() + 1;
+      $log_dir . '../html/' . "$division_name$cop_paired_round1" . '_cop.log';
 
     # Extract TSH config vars
 
@@ -216,6 +220,7 @@ sub Run ($$@) {
           extend_tsh_config_array( $gibson_spread, $number_of_rounds ),
         hopefulness =>
           extend_tsh_config_array( $hopefulness, $number_of_rounds ),
+        bye_active => 0,
     };
 
     my %times_played          = ();
@@ -373,9 +378,9 @@ sub copy_log_to_html_directory {
         log_info(
             $config,
             sprintf(
-                "\nSuccessfully copied %s to %s: %s\n",
+                "\nSuccessfully copied %s to %s\n",
                 $config->{log_filename},
-                $config->{html_log_filename}, $!
+                $config->{html_log_filename}
             )
         );
     }
@@ -630,6 +635,7 @@ sub cop {
     if ( $number_of_players % 2 == 1 ) {
         add_bye_player( $tournament_players, $number_of_players );
         $number_of_players = scalar(@$tournament_players);
+        $config->{bye_active} = 1;
     }
 
     sort_tournament_players_by_record($tournament_players);
@@ -755,7 +761,7 @@ sub cop {
     log_info(
         $config,
         sprintf(
-"\n\nWeights\n\n%-92s | %-3s = %7s = %7s + %7s + %7s + %7s + %7s + %7s\n",
+"\n\nWeights\n\n%-94s | %-3s = %7s = %7s + %7s + %7s + %7s + %7s + %7s\n",
             "Pairing", "Rpt",     "Total",  "Repeats", "RankDif",
             "RankPla", "Control", "Gibson", "KOTH"
         )
@@ -815,7 +821,15 @@ sub cop {
 
             my $times_played_key =
               create_times_played_key( $player_i->{id}, $player_j->{id} );
-            if (   $both_cannot_get_payout
+            if (   $config->{bye_active}
+                && $lowest_gibson_rank > 0
+                && $i > $lowest_gibson_rank )
+            {
+          # If byes are active and at least one person is gibsonized,
+          # the gibsonized players should receive the bye instead of anyone else
+                $repeat_weight += ( PROHIBITIVE_WEIGHT / 10 );
+            }
+            elsif ($both_cannot_get_payout
                 && $previous_pairing_hash->{$times_played_key} )
             {
               # If both players are out of the money avoid a back to back repeat
@@ -1640,7 +1654,7 @@ sub play_round {
   outer: for ( my $i = 0 ; $i < scalar @$pairings ; $i++ ) {
         my $pairing = $pairings->[$i];
         for ( my $j = 0 ; $j < 2 ; $j++ ) {
-            if ( $tournament_players->[$pairing->[$j]]->{is_bye} ) {
+            if ( $tournament_players->[ $pairing->[$j] ]->{is_bye} ) {
 
                 # Player gets a bye
                 $tournament_players->[ $pairing->[ 1 - $j ] ]->{spread} += 50;

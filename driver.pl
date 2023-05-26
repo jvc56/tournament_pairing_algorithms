@@ -349,7 +349,7 @@ sub get_config_for_t_file_round {
 
     return create_cop_config(
         $start_round, $final_round,
-        6,            6,
+        10,           10,
         $lowest_ranked_payout, [ 300, 250, 200 ],
         [0.25], $final_round - 4,
         [ 0, 0.1, 0.05, 0.01 ], $log_filename

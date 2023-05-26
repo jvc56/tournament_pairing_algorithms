@@ -115,8 +115,7 @@ sub Run ($$@) {
 
     my $last_paired_round0 = $dp->LastPairedRound0();
 
-    my $timestamp = localtime();
-    $timestamp =~ s/[\s\:]/_/g;
+    my $timestamp     = get_timestamp();
     my $division_name = $dp->Name();
     my $sr1           = $sr0 + 1;
 
@@ -386,6 +385,20 @@ sub copy_log_to_html_directory {
     }
 }
 
+sub get_timestamp {
+    my ( $sec, $min, $hour, $day, $month, $year ) = localtime();
+
+    $year += 1900;
+    $month = sprintf( "%02d", $month + 1 );
+    $day   = sprintf( "%02d", $day );
+    $hour  = sprintf( "%02d", $hour );
+    $min   = sprintf( "%02d", $min );
+    $sec   = sprintf( "%02d", $sec );
+
+    my $timestamp = "$year\_$month\_$day\_$hour\_$min\_$sec";
+    return $timestamp;
+}
+
 # Create new tournament results
 # The tournament results are a 2-d array
 # represented as a 1-d array. Each row
@@ -594,6 +607,12 @@ sub config_to_string {
         $config->{control_loss_activation_round} + 1 );
     $ret .= sprintf( "%31s %s\n", "Threads:", $config->{number_of_threads} );
 
+    my $active_bye_text = 'FALSE';
+    if ( $config->{bye_active} ) {
+        $active_bye_text = 'ACTIVE';
+    }
+    $ret .= sprintf( "%31s %s\n", "Bye Active:", $active_bye_text );
+
     # Write a marker designating which array values are being used
     # for this round.
     $ret .= sprintf( "%31s %s",
@@ -801,9 +820,11 @@ sub cop {
     # Existing problems:
     # Someone is gibsonized, but everyone can still cash
 
-    my $max_weight  = 0;
-    my @edges       = ();
-    my %weight_hash = ();
+    my $max_weight               = 0;
+    my @edges                    = ();
+    my %weight_hash              = ();
+    my $destinys_child           = -1;
+    my $control_loss_weight_used = 0;
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player_i = $tournament_players->[$i];
         for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
@@ -819,15 +840,17 @@ sub cop {
             my $repeat_weight = int( ( $number_of_times_played * 2 ) *
                   ( ( $number_of_players / 3 )**3 ) );
 
+            my $gibson_weight = 0;
             my $times_played_key =
               create_times_played_key( $player_i->{id}, $player_j->{id} );
             if (   $config->{bye_active}
+                && $player_j->{is_bye}
                 && $lowest_gibson_rank > 0
                 && $i > $lowest_gibson_rank )
             {
           # If byes are active and at least one person is gibsonized,
           # the gibsonized players should receive the bye instead of anyone else
-                $repeat_weight += ( PROHIBITIVE_WEIGHT / 10 );
+                $gibson_weight += PROHIBITIVE_WEIGHT;
             }
             elsif ($both_cannot_get_payout
                 && $previous_pairing_hash->{$times_played_key} )
@@ -854,7 +877,6 @@ sub cop {
             # Pair with payout placers weight
             my $pair_with_placer_weight = 0;
             my $control_loss_weight     = 0;
-            my $gibson_weight           = 0;
             my $koth_weight             = 0;
 
             if ( $config->{number_of_rounds_remaining} == 1 ) {
@@ -913,6 +935,19 @@ sub cop {
                                 $lowest_ranked_players_who_can_finish_in_nth_statistically
                                 ->[$i]
                                 && $i == $j - 1 )
+                            || (
+                                # Control loss is being applied
+                                $control_loss_weight_used &&
+
+                                # The contender group is odd
+                                $destinys_child % 2 == 0 &&
+
+                                # Player i is in the contender group
+                                $i < $destinys_child &&
+
+                                # Player j is one below destinys child
+                                $j == $destinys_child + 1
+                            )
                           )
                         {
                             # player j can still can catch player i
@@ -920,6 +955,11 @@ sub cop {
                             # no one in the simulations catch up to player i
                             # but player i isn't gibsonized, so player i can
                             # play player j if i = j - 1
+                            # or
+                            # the forced pairing with first and destinys child
+                            # creates an odd contender group and we need to pull
+                            # in the player one rank below destinys child to
+                            # avoid an odd number
 
                             # add a penalty for the distance of this pairing
                             $pair_with_placer_weight = (
@@ -978,7 +1018,11 @@ sub cop {
                         )
                       )
                     {
-                        $control_loss_weight = PROHIBITIVE_WEIGHT;
+                        $control_loss_weight      = PROHIBITIVE_WEIGHT;
+                        $control_loss_weight_used = 1;
+                    }
+                    else {
+                        $destinys_child = $j;
                     }
                 }
             }
@@ -1127,56 +1171,6 @@ sub get_lowest_ranked_players_who_can_finish_in_nth {
                 $lowest_ranked_players_who_can_finish_in_nth_absolutely
                   [$final_rank_index] = $player_current_rank_index;
             }
-        }
-    }
-
-    # The winner group has at least one person
-    my $contender_group_size = 1;
-    my $lowest_ranked_winner =
-      $lowest_ranked_players_who_can_finish_in_nth_statistically[0];
-    for ( my $i = 1 ; $i < scalar @{$sim_tournament_players} ; $i++ ) {
-        if ( $lowest_ranked_players_who_can_finish_in_nth_statistically[$i] !=
-            $lowest_ranked_winner )
-        {
-            last;
-        }
-        $contender_group_size++;
-    }
-
-    log_info( $config,
-        sprintf( "\nContender group size: %d\n", $contender_group_size, ) );
-
-    if (   $contender_group_size > 1
-        && $contender_group_size % 2 == 1 )
-    {
-        # The winner group is odd, we need to bring in someone
-        # who is technically not included to even it.
-        my $lowest_lockout_rank = $contender_group_size - 1;
-        if ( $lowest_ranked_players_who_can_finish_in_nth_statistically
-            [$lowest_lockout_rank] != $sim_number_of_players - 1 )
-        {
-            my $previous_player =
-              $lowest_ranked_players_who_can_finish_in_nth_statistically
-              [$lowest_lockout_rank];
-            $lowest_ranked_players_who_can_finish_in_nth_statistically
-              [$lowest_lockout_rank]++;
-            my $new_player =
-              $lowest_ranked_players_who_can_finish_in_nth_statistically
-              [$lowest_lockout_rank];
-            log_info(
-                $config,
-                sprintf(
-                    "\nWinner group was expanded for %d: %s -> %s\n",
-                    $lowest_lockout_rank + 1,
-                    player_string(
-                        $sim_tournament_players->[$previous_player],
-                        $previous_player
-                    ),
-                    player_string(
-                        $sim_tournament_players->[$new_player], $new_player
-                    )
-                )
-            );
         }
     }
 

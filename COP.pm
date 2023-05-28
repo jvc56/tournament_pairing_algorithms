@@ -1,19 +1,9 @@
 #!/usr/bin/perl
 
-# TODO:
-# use factor 0.75N for small divisions?
-# make hopefulness a single config
+# Testing:
+# gibsonized players get the bye
+# odd contender groups
 
-# DONE:
-# First vs last after gibson?
-# pretty print the config
-# multithreading
-# Last round KOTH sim should account for gibsonizations
-# All players gibsonized for cash payouts
-# show pairings bug
-# Handle removed players
-# Use based on round and last paired round
-# Active control loss based on current round not the based-on round
 
 package TSH::Command::COP;
 
@@ -178,8 +168,8 @@ sub Run ($$@) {
         return 0;
     }
 
-    my $lowest_ranked_payout =
-      get_lowest_ranked_payout( $tournament->Config(), $division_name );
+    my ($lowest_ranked_payout, $lowest_ranked_class_payouts) =
+      get_lowest_ranked_payouts( $tournament->Config(), $division_name );
     if ( $lowest_ranked_payout < 0 ) {
         $tournament->TellUser( 'ebadconfigentry', 'prizes' );
         return 0;
@@ -213,6 +203,7 @@ sub Run ($$@) {
         control_loss_activation_round => $control_loss_activation_round - 1,
         number_of_rounds_remaining    => ( $number_of_rounds - 1 ) - $sr0,
         lowest_ranked_payout          => $lowest_ranked_payout - 1,
+        lowest_ranked_class_payouts   => $lowest_ranked_class_payouts,
         cumulative_gibson_spreads =>
           get_cumulative_gibson_spreads( $gibson_spread, $number_of_rounds ),
         gibson_spreads =>
@@ -284,7 +275,9 @@ sub Run ($$@) {
 
         push @tournament_players, new_tournament_player(
             $player_id,
-            $player->PrettyName(), $player_index,
+            $player->PrettyName(),
+            $player->Class(),
+            $player_index,
 
             # Wins count as 2 and draws count as 1 to
             # keep everything in integers.
@@ -451,10 +444,11 @@ sub new_player_scores {
 # Tournament players
 
 sub new_tournament_player {
-    my ( $id, $name, $index, $wins, $spread, $is_bye ) = @_;
+    my ( $id, $name, $class, $index, $wins, $spread, $is_bye ) = @_;
     my $self = {
         id    => $id,
         name  => $name,
+        class => $class,
         index => $index,
 
         # The start_* fields are used to reset the players
@@ -480,6 +474,7 @@ sub copy_tournament_players {
         push @new_tournament_players,
           new_tournament_player(
             $tournament_player->{id},     $tournament_player->{name},
+            $tournament_player->{class}
             $tournament_player->{index},  $tournament_player->{wins},
             $tournament_player->{spread}, $tournament_player->{is_bye}
           );
@@ -498,29 +493,37 @@ sub add_bye_player {
 
     # This display index can be the same as the original index
     push @{$tournament_players},
-      new_tournament_player( BYE_PLAYER_ID, 'BYE', $bye_player_index, 0, 0, 1 );
+      new_tournament_player( BYE_PLAYER_ID, 'BYE', 'BYE', $bye_player_index, 0, 0, 1 );
 }
 
 # Extract lowest payout rank
 
-sub get_lowest_ranked_payout {
+sub get_lowest_ranked_payouts {
     my ( $tsh_config, $division_name ) = @_;
 
     my $prizes_config = $tsh_config->{prizes};
 
     my $lowest_ranked_payout = -1;
+    my %lowest_ranked_class_payouts = ();
     for ( my $i = 0 ; $i < scalar @{$prizes_config} ; $i++ ) {
         my $prize_specification = $prizes_config->[$i];
-        if (   $prize_specification->{division}
-            && uc( $prize_specification->{division} ) eq uc($division_name)
-            && $prize_specification->{type} eq 'rank'
-            && !$prize_specification->{class}
-            && $prize_specification->{subtype} > $lowest_ranked_payout )
+        my $class = $prize_specification->{class};
+        my $division = $prize_specification->{division};
+        my $type = $prize_specification->{type};
+        my $place = $prize_specification->{subtype};
+        if (  $division
+            && uc( $division ) eq uc($division_name)
+            && $type eq 'rank' )
         {
-            $lowest_ranked_payout = $prize_specification->{subtype};
+            # This is a place or class prize
+            if ($class && $place > $lowest_ranked_class_payouts{$class}) {
+                $lowest_ranked_class_payouts{$class} = $place;
+            } elsif ($place > $lowest_ranked_payout) {
+                $lowest_ranked_payout = $place;
+            }
         }
     }
-    return $lowest_ranked_payout;
+    return $lowest_ranked_payout, \%lowest_ranked_class_payouts;
 }
 
 # Gibson spread
@@ -888,6 +891,7 @@ sub cop {
                            $i <= $lowest_gibson_rank
                         && $j <= $lowest_ranked_player_who_can_cash_absolutely
                         && $j > $lowest_gibson_rank
+                        && !$player_j->{is_bye}
                     )
                     || (   $i > $lowest_gibson_rank
                         && $i <= $lowest_ranked_player_who_can_cash_absolutely

@@ -3,7 +3,8 @@
 # Testing:
 # gibsonized players get the bye
 # odd contender groups
-
+# class prize contenders in last round
+# pair around an existing pairing
 
 package TSH::Command::COP;
 
@@ -168,7 +169,7 @@ sub Run ($$@) {
         return 0;
     }
 
-    my ($lowest_ranked_payout, $lowest_ranked_class_payouts) =
+    my ( $lowest_ranked_payout, $lowest_ranked_class_payouts ) =
       get_lowest_ranked_payouts( $tournament->Config(), $division_name );
     if ( $lowest_ranked_payout < 0 ) {
         $tournament->TellUser( 'ebadconfigentry', 'prizes' );
@@ -188,31 +189,6 @@ sub Run ($$@) {
         $number_of_threads = 1;
     }
 
-    # Create the special config for cop
-    my $cop_config = {
-        log_filename               => $log_filename,
-        html_log_filename          => $html_log_filename,
-        number_of_sims             => $number_of_sims,
-        number_of_threads          => $number_of_threads,
-        number_of_rounds           => $number_of_rounds,
-        last_paired_round          => $last_paired_round0,
-        always_wins_number_of_sims => $always_wins_number_of_sims,
-        control_loss_thresholds    => extend_tsh_config_array(
-            $control_loss_thresholds, $number_of_rounds
-        ),
-        control_loss_activation_round => $control_loss_activation_round - 1,
-        number_of_rounds_remaining    => ( $number_of_rounds - 1 ) - $sr0,
-        lowest_ranked_payout          => $lowest_ranked_payout - 1,
-        lowest_ranked_class_payouts   => $lowest_ranked_class_payouts,
-        cumulative_gibson_spreads =>
-          get_cumulative_gibson_spreads( $gibson_spread, $number_of_rounds ),
-        gibson_spreads =>
-          extend_tsh_config_array( $gibson_spread, $number_of_rounds ),
-        hopefulness =>
-          extend_tsh_config_array( $hopefulness, $number_of_rounds ),
-        bye_active => 0,
-    };
-
     my %times_played          = ();
     my %previous_pairing_hash = ();
 
@@ -221,12 +197,17 @@ sub Run ($$@) {
     my $number_of_players  = scalar @players;
     my @tournament_players = ();
     my $player_index       = 0;
+    my $top_class;
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
-        my $player = $players[$i];
+        my $player       = $players[$i];
+        my $player_class = $player->Class();
+        my $player_id    = $player->ID();
+        if ( $player_id == 1 ) {
+            $top_class = $player_class;
+        }
         if ( !$player->Active() ) {
             next;
         }
-        my $player_id = $player->ID();
         for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
             my $opponent = $players[$j];
             if ( !$opponent->Active() ) {
@@ -286,6 +267,32 @@ sub Run ($$@) {
         );
         $player_index++;
     }
+
+    # Create the special config for cop
+    my $cop_config = {
+        log_filename               => $log_filename,
+        html_log_filename          => $html_log_filename,
+        number_of_sims             => $number_of_sims,
+        number_of_threads          => $number_of_threads,
+        number_of_rounds           => $number_of_rounds,
+        last_paired_round          => $last_paired_round0,
+        always_wins_number_of_sims => $always_wins_number_of_sims,
+        control_loss_thresholds    => extend_tsh_config_array(
+            $control_loss_thresholds, $number_of_rounds
+        ),
+        control_loss_activation_round => $control_loss_activation_round - 1,
+        number_of_rounds_remaining    => ( $number_of_rounds - 1 ) - $sr0,
+        lowest_ranked_payout          => $lowest_ranked_payout,
+        lowest_ranked_class_payouts   => $lowest_ranked_class_payouts,
+        top_class                     => $top_class,
+        cumulative_gibson_spreads =>
+          get_cumulative_gibson_spreads( $gibson_spread, $number_of_rounds ),
+        gibson_spreads =>
+          extend_tsh_config_array( $gibson_spread, $number_of_rounds ),
+        hopefulness =>
+          extend_tsh_config_array( $hopefulness, $number_of_rounds ),
+        bye_active => 0,
+    };
 
     my $id_pairings = cop(
         $cop_config,    \@tournament_players,
@@ -473,10 +480,10 @@ sub copy_tournament_players {
         my $tournament_player = $tournament_players->[$i];
         push @new_tournament_players,
           new_tournament_player(
-            $tournament_player->{id},     $tournament_player->{name},
-            $tournament_player->{class}
-            $tournament_player->{index},  $tournament_player->{wins},
-            $tournament_player->{spread}, $tournament_player->{is_bye}
+            $tournament_player->{id},    $tournament_player->{name},
+            $tournament_player->{class}, $tournament_player->{index},
+            $tournament_player->{wins},  $tournament_player->{spread},
+            $tournament_player->{is_bye}
           );
     }
     return \@new_tournament_players;
@@ -493,7 +500,8 @@ sub add_bye_player {
 
     # This display index can be the same as the original index
     push @{$tournament_players},
-      new_tournament_player( BYE_PLAYER_ID, 'BYE', 'BYE', $bye_player_index, 0, 0, 1 );
+      new_tournament_player( BYE_PLAYER_ID, 'BYE', 'BYE', $bye_player_index, 0,
+        0, 1 );
 }
 
 # Extract lowest payout rank
@@ -503,22 +511,25 @@ sub get_lowest_ranked_payouts {
 
     my $prizes_config = $tsh_config->{prizes};
 
-    my $lowest_ranked_payout = -1;
+    my $lowest_ranked_payout        = -1;
     my %lowest_ranked_class_payouts = ();
     for ( my $i = 0 ; $i < scalar @{$prizes_config} ; $i++ ) {
         my $prize_specification = $prizes_config->[$i];
-        my $class = $prize_specification->{class};
-        my $division = $prize_specification->{division};
-        my $type = $prize_specification->{type};
-        my $place = $prize_specification->{subtype};
-        if (  $division
-            && uc( $division ) eq uc($division_name)
+        my $class               = $prize_specification->{class};
+        my $division            = $prize_specification->{division};
+        my $type                = $prize_specification->{type};
+
+        # Convert from 1-index to 0-index
+        my $place = $prize_specification->{subtype} - 1;
+        if (   $division
+            && uc($division) eq uc($division_name)
             && $type eq 'rank' )
         {
             # This is a place or class prize
-            if ($class && $place > $lowest_ranked_class_payouts{$class}) {
+            if ( $class && $place > $lowest_ranked_class_payouts{$class} ) {
                 $lowest_ranked_class_payouts{$class} = $place;
-            } elsif ($place > $lowest_ranked_payout) {
+            }
+            elsif ( $place > $lowest_ranked_payout ) {
                 $lowest_ranked_payout = $place;
             }
         }
@@ -605,6 +616,13 @@ sub config_to_string {
     $ret .= sprintf( "%31s %s\n",
         "Lowest Ranked Cash Payout:",
         $config->{lowest_ranked_payout} + 1 );
+
+    foreach my $class ( sort keys %{ $config->{lowest_ranked_class_payouts} } )
+    {
+        $ret .= sprintf( "%31s %s\n",
+            sprintf( "Lowest Ranked Class Payout %s:", $class ),
+            $config->{lowest_ranked_class_payouts}->{$class} + 1 );
+    }
     $ret .= sprintf( "%31s %s\n",
         "Control Loss Activation Round:",
         $config->{control_loss_activation_round} + 1 );
@@ -777,18 +795,6 @@ sub cop {
         $control_status_text = 'DISABLED';
     }
 
-    log_info( $config,
-        sprintf( "\n\nControl loss is %s\n\n", $control_status_text ) );
-
-    log_info(
-        $config,
-        sprintf(
-"\n\nWeights\n\n%-94s | %-3s = %7s = %7s + %7s + %7s + %7s + %7s + %7s\n",
-            "Pairing", "Rpt",     "Total",  "Repeats", "RankDif",
-            "RankPla", "Control", "Gibson", "KOTH"
-        )
-    );
-
     # Get the number of repeats for each individual player
     my %number_of_repeats = ();
 
@@ -816,12 +822,45 @@ sub cop {
         }
     }
 
+    my $class_prize_pairings =
+      get_class_prize_pairings( $config, $tournament_players,
+        $lowest_ranked_player_who_can_cash_absolutely,
+        $number_of_players );
+
+    if ( scalar keys %{$class_prize_pairings} > 0 ) {
+        my %logged_players = ();
+        log_info( $config, "\n\nForced KOTH Class Prize Pairings:\n" );
+        foreach my $player ( sort keys %{$class_prize_pairings} ) {
+            my $opponent = $class_prize_pairings->{$player};
+            if (defined $logged_players{$player} || defined $logged_players{$opponent}) {
+                next;
+            }
+            log_info(
+                $config,
+                sprintf( "%s vs %s\n",
+                    player_string( $tournament_players->[$player],   $player ),
+                    player_string( $tournament_players->[$opponent], $opponent ) )
+            );
+            $logged_players{$player} = 1;
+            $logged_players{$opponent} = 1;
+        }
+    }
+
     # For the min weight matching, switch back to
     # using all of the tournament players since
     # everyone needs to be paired
 
-    # Existing problems:
-    # Someone is gibsonized, but everyone can still cash
+    log_info( $config,
+        sprintf( "\n\nControl loss is %s\n\n", $control_status_text ) );
+
+    log_info(
+        $config,
+        sprintf(
+"\n\nWeights\n\n%-94s | %-3s = %7s = %7s + %7s + %7s + %7s + %7s + %7s\n",
+            "Pairing", "Rpt",     "Total",  "Repeats", "RankDif",
+            "RankPla", "Control", "Gibson", "KOTH"
+        )
+    );
 
     my $max_weight               = 0;
     my @edges                    = ();
@@ -897,6 +936,10 @@ sub cop {
                         && $i <= $lowest_ranked_player_who_can_cash_absolutely
                         && ( $lowest_gibson_rank % 2 == $i % 2 || $i + 1 != $j )
                     )
+                    || (   ( defined $class_prize_pairings->{$i} )
+                        && ( $class_prize_pairings->{$i} != $j ) )
+                    || (   ( defined $class_prize_pairings->{$j} )
+                        && ( $class_prize_pairings->{$j} != $i ) )
                   )
                 {
                     # Gibsonized players should not play anyone in contention
@@ -907,6 +950,8 @@ sub cop {
                     # If player i has a odd rank, then they have
                     # already been weight appropiately with the
                     # player above them.
+
+                    # Enforce KOTH for players eligible for a class prize
                     $koth_weight = PROHIBITIVE_WEIGHT;
                 }
             }
@@ -1342,6 +1387,56 @@ sub get_lowest_gibson_rank {
     return $lowest_gibson_rank;
 }
 
+sub can_player_reach_rank {
+    my ( $config, $tournament_players, $player, $rank ) = @_;
+
+    # Divide wins by 2 because wins are worth 2 and draws are worth 1
+    return ( ( $tournament_players->[$rank]->{wins} - $player->{wins} ) / 2 )
+      <= $config->{number_of_rounds_remaining};
+}
+
+sub get_class_prize_pairings {
+    my ( $config, $tournament_players,
+        $lowest_ranked_player_who_can_cash_absolutely,
+        $number_of_players )
+      = @_;
+
+    my %class_pairings_remaining = ();
+    foreach my $class ( keys %{ $config->{lowest_ranked_class_payouts} } ) {
+        $class_pairings_remaining{$class} =
+          $config->{lowest_ranked_class_payouts}->{$class} + 1;
+    }
+    my %class_prize_pairings = ();
+    for (
+        my $i = $lowest_ranked_player_who_can_cash_absolutely + 1 ;
+        $i < $number_of_players ;
+        $i++
+      )
+    {
+        my $player_i = $tournament_players->[$i];
+        for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
+            my $player_j = $tournament_players->[$j];
+            if (
+                   $player_i->{class} ne $config->{top_class}
+                && $player_i->{class} eq $player_j->{class}
+                && $class_pairings_remaining{ $player_i->{class} } > 0
+                && ( !defined $class_prize_pairings{$i} )
+                && ( !defined $class_prize_pairings{$j} )
+                && can_player_reach_rank(
+                    $config,                   $tournament_players,
+                    $tournament_players->[$j], $i
+                )
+              )
+            {
+                $class_prize_pairings{$i} = $j;
+                $class_prize_pairings{$j} = $i;
+                $class_pairings_remaining{ $player_i->{class} }--;
+            }
+        }
+    }
+    return \%class_prize_pairings;
+}
+
 sub get_sim_tournament_players {
     my ( $config, $tournament_players ) = @_;
     my @sim_tournament_players = ();
@@ -1350,11 +1445,11 @@ sub get_sim_tournament_players {
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player = $tournament_players->[$i];
 
-        # Divide wins by 2 because wins are worth 2 and draws are worth 1
         my $can_technically_cash = $i <= $config->{lowest_ranked_payout}
-          || (
-            $tournament_players->[ $config->{lowest_ranked_payout} ]->{wins} -
-            $player->{wins} ) / 2 <= $config->{number_of_rounds_remaining};
+          || can_player_reach_rank(
+            $config, $tournament_players,
+            $player, $config->{lowest_ranked_payout}
+          );
         if ( $can_technically_cash || ( $i % 2 == 1 ) ) {
 
             # The sim players are given new indexes that
@@ -1362,7 +1457,8 @@ sub get_sim_tournament_players {
             # This index is used to record the simmed players final
             # rank when a simulation is finished.
             push @sim_tournament_players,
-              new_tournament_player( $player->{id}, $player->{name}, $i,
+              new_tournament_player( $player->{id}, $player->{name},
+                $player->{class}, $i,
                 $player->{wins}, $player->{spread}, $player->{is_bye} );
         }
         if ( !$can_technically_cash ) {
@@ -1886,7 +1982,7 @@ sub convert_pairings_to_id_pairings {
 sub player_string {
     my ( $player, $rank_index ) = @_;
     my $name_and_index =
-      sprintf( "%-6s %-23s", '(#' . ( $player->{id} ) . ')', $player->{name} );
+      sprintf( "%-6s %-23s", '(#' . ( $player->{id} ) . ( $player->{class} ) . ')', $player->{name} );
     my $wins_string = sprintf( "%0.1f", $player->{wins} / 2 );
     my $sign        = '+';
     if ( $player->{spread} < 0 ) {

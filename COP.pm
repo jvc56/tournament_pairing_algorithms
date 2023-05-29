@@ -104,7 +104,7 @@ sub Run ($$@) {
         return 0;
     }
 
-    my $last_paired_round0 = $dp->LastPairedRound0();
+    my $round_to_pair0 = $dp->FirstUnpairedRound0();
 
     my $timestamp     = get_timestamp();
     my $division_name = $dp->Name();
@@ -113,12 +113,11 @@ sub Run ($$@) {
     # +2 because:
     #  0-index to 1-index for humans, and
     #  TSH pairs the next available round
-    my $cop_paired_round1 = $last_paired_round0 + 2;
-    my $number_of_rounds  = $dp->MaxRound0() + 1;
+    my $round_to_pair1   = $round_to_pair0 + 1;
+    my $number_of_rounds = $dp->MaxRound0() + 1;
 
-    if ( $cop_paired_round1 > $number_of_rounds ) {
-        $tournament->TellUser( 'ebigrd', $cop_paired_round1,
-            $number_of_rounds );
+    if ( $round_to_pair1 > $number_of_rounds ) {
+        $tournament->TellUser( 'ebigrd', $round_to_pair1, $number_of_rounds );
         return 0;
     }
 
@@ -126,10 +125,10 @@ sub Run ($$@) {
         "$log_dir$timestamp"
       . "_$division_name"
       . "_round_"
-      . $cop_paired_round1
+      . $round_to_pair1
       . "_based_on_$sr1" . ".log";
     my $html_log_filename =
-      $log_dir . '../html/' . "$division_name$cop_paired_round1" . '_cop.log';
+      $log_dir . '../html/' . "$division_name$round_to_pair1" . '_cop.log';
 
     # Extract TSH config vars
 
@@ -198,6 +197,7 @@ sub Run ($$@) {
     my @tournament_players = ();
     my $player_index       = 0;
     my $top_class;
+    my %prepaired_players = ();
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player       = $players[$i];
         my $player_class = $player->Class();
@@ -215,9 +215,9 @@ sub Run ($$@) {
             }
             my $opponent_id = $opponent->ID();
             my $number_of_times_played =
-              $player->CountRoundRepeats( $opponent, $last_paired_round0 );
+              $player->CountRoundRepeats( $opponent, $round_to_pair1 - 1 );
             my $number_of_times_played_excluding_last_round =
-              $player->CountRoundRepeats( $opponent, $last_paired_round0 - 1 );
+              $player->CountRoundRepeats( $opponent, $round_to_pair1 - 2 );
 
             my $played_last_round = $number_of_times_played -
               $number_of_times_played_excluding_last_round;
@@ -246,7 +246,7 @@ sub Run ($$@) {
         # Count the byes by up to the based on round
         # (There does not seem to be an existing Player method for this)
         my $byes = 0;
-        for ( my $round = 0 ; $round <= $last_paired_round0 ; $round++ ) {
+        for ( my $round = 0 ; $round <= $round_to_pair1 - 1 ; $round++ ) {
             my $opponent = $player->{pairings}->[$round];
             if ( ( defined $opponent ) && $opponent == 0 ) {
                 $byes++;
@@ -266,6 +266,11 @@ sub Run ($$@) {
             $player->RoundSpread($sr0), 0
         );
         $player_index++;
+
+        my $actual_opponent_id = $player->OpponentID($round_to_pair0);
+        if ( defined $actual_opponent_id ) {
+            $prepaired_players{$player_id} = $actual_opponent_id;
+        }
     }
 
     # Create the special config for cop
@@ -275,7 +280,8 @@ sub Run ($$@) {
         number_of_sims             => $number_of_sims,
         number_of_threads          => $number_of_threads,
         number_of_rounds           => $number_of_rounds,
-        last_paired_round          => $last_paired_round0,
+        round_to_pair              => $round_to_pair0,
+        prepaired_players          => \%prepaired_players,
         always_wins_number_of_sims => $always_wins_number_of_sims,
         control_loss_thresholds    => extend_tsh_config_array(
             $control_loss_thresholds, $number_of_rounds
@@ -317,7 +323,7 @@ sub Run ($$@) {
     # Automatically show the pairings
     my $show_pairings_command =
       new TSH::Command::ShowPairings( 'noconsole' => 1 );
-    $show_pairings_command->Run( $tournament, $cop_paired_round1, $dp );
+    $show_pairings_command->Run( $tournament, $round_to_pair1, $dp );
 }
 
 =back
@@ -500,7 +506,7 @@ sub add_bye_player {
 
     # This display index can be the same as the original index
     push @{$tournament_players},
-      new_tournament_player( BYE_PLAYER_ID, 'BYE', 'BYE', $bye_player_index, 0,
+      new_tournament_player( BYE_PLAYER_ID, 'BYE', 'X', $bye_player_index, 0,
         0, 1 );
 }
 
@@ -607,10 +613,11 @@ sub config_to_string {
     my ($config) = @_;
     my $ret = "COP Config:\n\n";
     $ret .= sprintf( "%31s %s\n", "Log Filename:", $config->{log_filename} );
+    $ret .= sprintf( "%31s %s\n", "Pairing for Round:",
+        $config->{round_to_pair} + 1 );
     $ret .= sprintf( "%31s %s\n",
-        "Last Paired Round:",
-        $config->{last_paired_round} + 1 );
-    $ret .= sprintf( "%31s %s\n", "Rounds:", $config->{number_of_rounds} );
+        "Total Number of Rounds:",
+        $config->{number_of_rounds} );
     $ret .= sprintf( "%31s %s\n",
         "Rounds Remaining:",
         $config->{number_of_rounds_remaining} );
@@ -660,6 +667,31 @@ sub config_to_string {
     return $ret;
 }
 
+sub prepaired_players_to_string {
+    my ( $config, $tournament_players ) = @_;
+    if ( scalar keys %{ $config->{prepaired_players} } == 0 ) {
+        return "\n\nThere are no prepaired players\n\n";
+    }
+    my %player_id_to_tournament_player = ();
+    foreach my $player ( @{$tournament_players} ) {
+        $player_id_to_tournament_player{ $player->{id} } = $player;
+    }
+
+    my $ret = "\n\nPrepaired Players:\n\n";
+    foreach my $player_id ( sort keys %{ $config->{prepaired_players} } ) {
+        my $player = $player_id_to_tournament_player{$player_id};
+        my $opponent =
+          $player_id_to_tournament_player{ $config->{prepaired_players}
+              ->{$player_id} };
+        if ( $player->{id} < $opponent->{id} ) {
+            $ret .= sprintf( "%s vs %s\n",
+                player_string( $player,   -2 ),
+                player_string( $opponent, -2 ) );
+        }
+    }
+    return $ret;
+}
+
 # Pairing and simming
 
 sub cop {
@@ -669,6 +701,9 @@ sub cop {
     ) = @_;
 
     log_info( $config, config_to_string($config) );
+
+    log_info( $config,
+        prepaired_players_to_string( $config, $tournament_players ) );
 
     if ( $config->{number_of_rounds_remaining} <= 0 ) {
         return sprintf( "Invalid rounds remaining: %d\n",
@@ -791,8 +826,8 @@ sub cop {
     );
 
     # Add 1 because TSH will pair the round after the last paired round
-    my $control_loss_active = ( $config->{last_paired_round} + 1 ) >=
-      $config->{control_loss_activation_round};
+    my $control_loss_active =
+      $config->{round_to_pair} >= $config->{control_loss_activation_round};
 
     my $control_status_text = 'ACTIVE';
 
@@ -832,7 +867,9 @@ sub cop {
         $lowest_ranked_player_who_can_cash_absolutely,
         $number_of_players );
 
-    if ( scalar keys %{$class_prize_pairings} > 0 ) {
+    if ( $config->{number_of_rounds_remaining} == 1
+        && scalar keys %{$class_prize_pairings} > 0 )
+    {
         my %logged_players = ();
         log_info( $config, "\n\nForced KOTH Class Prize Pairings:\n" );
         foreach my $player ( sort keys %{$class_prize_pairings} ) {
@@ -867,9 +904,9 @@ sub cop {
     log_info(
         $config,
         sprintf(
-"\n\nWeights\n\n%-94s | %-3s = %7s = %7s + %7s + %7s + %7s + %7s + %7s\n",
+"\n\nWeights\n\n%-94s | %-3s = %7s = %7s + %7s + %7s + %7s + %7s + %7s + %7s\n",
             "Pairing", "Rpt",     "Total",  "Repeats", "RankDif",
-            "RankPla", "Control", "Gibson", "KOTH"
+            "CanCtch", "Control", "Gibson", "KOTH",    "Prepair"
         )
     );
 
@@ -881,7 +918,26 @@ sub cop {
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player_i = $tournament_players->[$i];
         for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
-            my $player_j = $tournament_players->[$j];
+            my $player_j         = $tournament_players->[$j];
+            my $prepaired_weight = 0;
+            if (
+                (
+                    defined $config->{prepaired_players}->{ $player_i->{id} }
+                    && $config->{prepaired_players}->{ $player_i->{id} } ne
+                    $player_j->{id}
+                )
+                || ( defined $config->{prepaired_players}->{ $player_j->{id} }
+                    && $config->{prepaired_players}->{ $player_j->{id} } ne
+                    $player_i->{id} )
+              )
+            {
+                # If this player already has a pairing with someone other than
+                # player j, then this pairing shouldn't be made. Technically,
+                # we could skip the rest of the calculations below since this
+                # weight is prohibitive, but this part of the code is not
+                # on the critical path.
+                $prepaired_weight = PROHIBITIVE_WEIGHT;
+            }
             my $both_cannot_get_payout =
                  $i > $lowest_ranked_player_who_can_cash_absolutely
               && $j > $lowest_ranked_player_who_can_cash_absolutely;
@@ -1032,10 +1088,8 @@ sub cop {
                             ) * 2;
                         }
                         else {
-                            # player j can't catch player i, so they should
-                            # preferrably not be paired
-                            $pair_with_placer_weight =
-                              ( PROHIBITIVE_WEIGHT / 2 );
+                   # player j can't catch player i, so they should not be paired
+                            $pair_with_placer_weight = PROHIBITIVE_WEIGHT;
                         }
                     }
 
@@ -1093,7 +1147,8 @@ sub cop {
               $pair_with_placer_weight +
               $control_loss_weight +
               $gibson_weight +
-              $koth_weight;
+              $koth_weight +
+              $prepaired_weight;
             if ( $weight > $max_weight ) {
                 $max_weight = $weight;
             }
@@ -1101,7 +1156,7 @@ sub cop {
             log_info(
                 $config,
                 sprintf(
-"%s vs %s | %3d = %7d = %7d + %7d + %7d + %7d + %7d + %7d\n",
+"%s vs %s | %3d = %7d = %7d + %7d + %7d + %7d + %7d + %7d + %7d\n",
                     player_string( $player_i, $i ),
                     player_string( $player_j, $j ),
                     $number_of_times_played,
@@ -1111,7 +1166,8 @@ sub cop {
                     $pair_with_placer_weight,
                     $control_loss_weight,
                     $gibson_weight,
-                    $koth_weight
+                    $koth_weight,
+                    $prepaired_weight
                 )
             );
             $weight_hash{ create_weight_hash_key( $player_i->{id},
@@ -1435,12 +1491,15 @@ sub get_class_prize_pairings {
                 && ( !defined $class_prize_pairings{$i} )
                 && ( !defined $class_prize_pairings{$j} )
                 && (
-                    ( !defined $previous_class_player_ranks{$player_i->{class}} )
+                    (
+                        !defined
+                        $previous_class_player_ranks{ $player_i->{class} }
+                    )
                     || can_player_reach_rank(
                         $config,
                         $tournament_players,
                         $tournament_players->[$i],
-                        $previous_class_player_ranks{$player_i->{class}}
+                        $previous_class_player_ranks{ $player_i->{class} }
                     )
                 )
                 && can_player_reach_rank(
@@ -1452,7 +1511,7 @@ sub get_class_prize_pairings {
                 $class_prize_pairings{$i} = $j;
                 $class_prize_pairings{$j} = $i;
                 $class_pairings_remaining{ $player_i->{class} }--;
-                $previous_class_player_ranks{$player_i->{class}} = $j;
+                $previous_class_player_ranks{ $player_i->{class} } = $j;
             }
         }
     }
@@ -2027,7 +2086,7 @@ sub results_string {
     sort_tournament_players_by_record($tournament_players);
     my $number_of_players = scalar @{$tournament_players};
     my $result            = "\n\nResults\n\n";
-    $result .= sprintf( "%46s", ("") );
+    $result .= sprintf( "%47s", ("") );
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         $result .= sprintf( "%-7s", ( $i + 1 ) );
     }

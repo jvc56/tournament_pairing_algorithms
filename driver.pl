@@ -228,22 +228,6 @@ sub create_cop_config {
     };
 }
 
-sub get_pairings {
-    my ( $filename, $config, $start_round ) = @_;
-
-    my ( $tournament_players, $times_played_hash, $previous_pairing_hash ) =
-      tournament_players_from_tfile( $filename, $start_round );
-
-    if ( !defined $times_played_hash ) {
-        return $tournament_players;
-    }
-
-    return cop(
-        $config,            $tournament_players,
-        $times_played_hash, $previous_pairing_hash
-    );
-}
-
 sub get_all_test_directories {
     my $dir = TEST_DATA_DIRECTORY;
     opendir( my $dh, $dir ) || die "Can't open directory $dir: $!";
@@ -405,10 +389,11 @@ sub test_t_file_for_autoplay_round {
     $cop_config->{log_filename} .= '.autoplay';
     printf( "Logging to %s\n", $cop_config->{log_filename} );
 
-    return cop(
+    my ($pairings, $warning) = cop(
         $cop_config,        $tournament_players,
         $times_played_hash, $previous_pairing_hash
-    ), $cop_config;
+    );
+    return $pairings, $cop_config;
 }
 
 sub test_t_file_play_round {

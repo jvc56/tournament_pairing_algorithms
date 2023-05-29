@@ -1417,7 +1417,8 @@ sub get_class_prize_pairings {
         $class_pairings_remaining{$class} =
           $config->{lowest_ranked_class_payouts}->{$class} + 1;
     }
-    my %class_prize_pairings = ();
+    my %previous_class_player_ranks = ();
+    my %class_prize_pairings        = ();
     for (
         my $i = $lowest_ranked_player_who_can_cash_absolutely + 1 ;
         $i < $number_of_players ;
@@ -1433,6 +1434,15 @@ sub get_class_prize_pairings {
                 && $class_pairings_remaining{ $player_i->{class} } > 0
                 && ( !defined $class_prize_pairings{$i} )
                 && ( !defined $class_prize_pairings{$j} )
+                && (
+                    ( !defined $previous_class_player_ranks{$player_i->{class}} )
+                    || can_player_reach_rank(
+                        $config,
+                        $tournament_players,
+                        $tournament_players->[$i],
+                        $previous_class_player_ranks{$player_i->{class}}
+                    )
+                )
                 && can_player_reach_rank(
                     $config,                   $tournament_players,
                     $tournament_players->[$j], $i
@@ -1442,6 +1452,7 @@ sub get_class_prize_pairings {
                 $class_prize_pairings{$i} = $j;
                 $class_prize_pairings{$j} = $i;
                 $class_pairings_remaining{ $player_i->{class} }--;
+                $previous_class_player_ranks{$player_i->{class}} = $j;
             }
         }
     }

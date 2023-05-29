@@ -300,10 +300,14 @@ sub Run ($$@) {
         bye_active => 0,
     };
 
-    my $id_pairings = cop(
+    my ( $id_pairings, $warnings ) = cop(
         $cop_config,    \@tournament_players,
         \%times_played, \%previous_pairing_hash
     );
+
+    for ( my $i = 0 ; $i < scalar @{$warnings} ; $i++ ) {
+        $tournament->TellUser( 'eapfail', $warnings->[$i] );
+    }
 
     my $setupp = $this->SetupForPairings(
         'division' => $dp,
@@ -526,11 +530,12 @@ sub get_lowest_ranked_payouts {
         my $type                = $prize_specification->{type};
 
         # Convert from 1-index to 0-index
-        my $place = $prize_specification->{subtype} - 1;
         if (   $division
             && uc($division) eq uc($division_name)
             && $type eq 'rank' )
         {
+            my $place = $prize_specification->{subtype} - 1;
+
             # This is a place or class prize
             if (
                 ( defined $class )
@@ -1183,6 +1188,7 @@ sub cop {
     sort_tournament_players_by_index($tournament_players);
 
     my $weight_sum = 0;
+    my @warnings   = ();
     for ( my $i = 0 ; $i < scalar @{$pairings} ; $i++ ) {
         my $j        = $pairings->[$i];
         my $player_i = $tournament_players->[$i];
@@ -1194,15 +1200,17 @@ sub cop {
               create_weight_hash_key( $player_i->{id}, $player_j->{id} );
             my $pairing_weight = $weight_hash{$weight_hash_key};
             if ( $pairing_weight > PROHIBITIVE_WEIGHT ) {
-                log_info(
-                    $config,
-                    sprintf(
+                my $warning = sprintf(
 "WARNING: Pairing exceeds prohibitive weight (%d): %s vs %s\n",
-                        $pairing_weight,
-                        player_string( $player_i, $i ),
-                        player_string( $player_j, $j )
-                    )
+                    $pairing_weight,
+                    player_string( $player_i, $i ),
+                    player_string( $player_j, $j )
                 );
+                log_info(
+                    $config, $warning
+
+                );
+                push @warnings, $warning;
             }
             $weight_sum += $pairing_weight;
         }
@@ -1221,7 +1229,7 @@ sub cop {
 
     copy_log_to_html_directory($config);
 
-    return $id_pairings;
+    return $id_pairings, \@warnings;
 }
 
 sub create_weight_hash_key {

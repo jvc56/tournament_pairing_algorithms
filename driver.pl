@@ -160,9 +160,18 @@ sub tournament_players_from_players_scores {
             $spread += $game_spread;
         }
 
+        my $class = 'A';
+        if (   $number_of_players > 25
+            && $player_index >= ( ( $number_of_players * 2 ) / 3 ) )
+        {
+            $class = 'C';
+        }
+        elsif ( $player_index >= $number_of_players / 2 ) {
+            $class = 'B';
+        }
         push @tournament_players,
           new_tournament_player( $pscores->{index} + 1,
-            $pscores->{name}, $pscores->{index}, $wins, $spread, 0 );
+            $pscores->{name}, $class, $pscores->{index}, $wins, $spread, 0 );
     }
 
     for my $times_played_key ( keys %times_played_hash ) {
@@ -196,15 +205,17 @@ sub create_cop_config {
     ) = @_;
 
     return {
-        log_filename               => $log_filename,
-        html_log_filename          => $log_filename . '.html',
-        number_of_threads          => 1,
-        number_of_sims             => $number_of_sims,
-        number_of_rounds           => $final_round,
-        last_paired_round          => $start_round - 1,
-        always_wins_number_of_sims => $always_wins_number_of_sims,
-        number_of_rounds_remaining => $final_round - $start_round,
-        lowest_ranked_payout       => $lowest_ranked_payout - 1,
+        log_filename                => $log_filename,
+        html_log_filename           => $log_filename . '.html',
+        number_of_threads           => 1,
+        number_of_sims              => $number_of_sims,
+        number_of_rounds            => $final_round,
+        last_paired_round           => $start_round - 1,
+        always_wins_number_of_sims  => $always_wins_number_of_sims,
+        number_of_rounds_remaining  => $final_round - $start_round,
+        lowest_ranked_payout        => $lowest_ranked_payout - 1,
+        lowest_ranked_class_payouts => { 'B' => 0, 'C' => 1 },
+        top_class                   => 'A',
         cumulative_gibson_spreads =>
           get_cumulative_gibson_spreads( $gibson_spread, $final_round ),
         gibson_spreads =>

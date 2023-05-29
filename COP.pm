@@ -867,7 +867,9 @@ sub cop {
         $lowest_ranked_player_who_can_cash_absolutely,
         $number_of_players );
 
-    if ( scalar keys %{$class_prize_pairings} > 0 ) {
+    if ( $config->{number_of_rounds_remaining} == 1
+        && scalar keys %{$class_prize_pairings} > 0 )
+    {
         my %logged_players = ();
         log_info( $config, "\n\nForced KOTH Class Prize Pairings:\n" );
         foreach my $player ( sort keys %{$class_prize_pairings} ) {

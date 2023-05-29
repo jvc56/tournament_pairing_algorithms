@@ -526,10 +526,15 @@ sub get_lowest_ranked_payouts {
             && $type eq 'rank' )
         {
             # This is a place or class prize
-            if ( $class && $place > $lowest_ranked_class_payouts{$class} ) {
+            if (
+                ( defined $class )
+                && ( !defined $lowest_ranked_class_payouts{$class}
+                    || $place > $lowest_ranked_class_payouts{$class} )
+              )
+            {
                 $lowest_ranked_class_payouts{$class} = $place;
             }
-            elsif ( $place > $lowest_ranked_payout ) {
+            elsif ( ( !defined $class ) && $place > $lowest_ranked_payout ) {
                 $lowest_ranked_payout = $place;
             }
         }
@@ -832,16 +837,22 @@ sub cop {
         log_info( $config, "\n\nForced KOTH Class Prize Pairings:\n" );
         foreach my $player ( sort keys %{$class_prize_pairings} ) {
             my $opponent = $class_prize_pairings->{$player};
-            if (defined $logged_players{$player} || defined $logged_players{$opponent}) {
+            if (   defined $logged_players{$player}
+                || defined $logged_players{$opponent} )
+            {
                 next;
             }
             log_info(
                 $config,
-                sprintf( "%s vs %s\n",
-                    player_string( $tournament_players->[$player],   $player ),
-                    player_string( $tournament_players->[$opponent], $opponent ) )
+                sprintf(
+                    "%s vs %s\n",
+                    player_string( $tournament_players->[$player], $player ),
+                    player_string(
+                        $tournament_players->[$opponent], $opponent
+                    )
+                )
             );
-            $logged_players{$player} = 1;
+            $logged_players{$player}   = 1;
             $logged_players{$opponent} = 1;
         }
     }
@@ -1981,8 +1992,9 @@ sub convert_pairings_to_id_pairings {
 
 sub player_string {
     my ( $player, $rank_index ) = @_;
-    my $name_and_index =
-      sprintf( "%-6s %-23s", '(#' . ( $player->{id} ) . ( $player->{class} ) . ')', $player->{name} );
+    my $name_and_index = sprintf( "%-6s %-23s",
+        '(#' . ( $player->{id} ) . ( $player->{class} ) . ')',
+        $player->{name} );
     my $wins_string = sprintf( "%0.1f", $player->{wins} / 2 );
     my $sign        = '+';
     if ( $player->{spread} < 0 ) {

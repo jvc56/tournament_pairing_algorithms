@@ -943,9 +943,14 @@ sub cop {
                 # on the critical path.
                 $prepaired_weight = PROHIBITIVE_WEIGHT;
             }
-            my $both_cannot_get_payout =
+            my $both_cannot_get_payout_absolutely =
                  $i > $lowest_ranked_player_who_can_cash_absolutely
               && $j > $lowest_ranked_player_who_can_cash_absolutely;
+
+            my $both_cannot_get_payout_statistically =
+                 $i > $lowest_ranked_player_who_can_cash_statistically
+              && $j > $lowest_ranked_player_who_can_cash_statistically;
+
 
             my $number_of_times_played =
               get_number_of_times_played( $player_i->{id},
@@ -966,7 +971,7 @@ sub cop {
           # the gibsonized players should receive the bye instead of anyone else
                 $gibson_weight += PROHIBITIVE_WEIGHT;
             }
-            elsif ($both_cannot_get_payout
+            elsif ($both_cannot_get_payout_statistically
                 && $previous_pairing_hash->{$times_played_key} )
             {
               # If both players are out of the money avoid a back to back repeat
@@ -981,7 +986,7 @@ sub cop {
 
             # If neither player can cash or player i is gibsonized,
             # rank difference weight should count for very little.
-            if ( $both_cannot_get_payout || $i <= $lowest_gibson_rank ) {
+            if ( $both_cannot_get_payout_absolutely || $i <= $lowest_gibson_rank ) {
                 $rank_difference_weight = ( $j - $i );
             }
             else {

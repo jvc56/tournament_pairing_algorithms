@@ -754,8 +754,8 @@ sub cop {
     log_info(
         $config,
         results_string(
-            $config,                       $sim_tournament_players,
-            $improved_factor_pair_results, INITIAL_FACTOR
+            $config,              $sim_tournament_players,
+            $factor_pair_results, INITIAL_FACTOR
         )
     );
 
@@ -771,6 +771,14 @@ sub cop {
     my $improved_factor_pair_results = sim_factor_pair(
         $config,             $sim_tournament_players,
         $lowest_gibson_rank, $improved_factor_constant
+    );
+
+    log_info(
+        $config,
+        results_string(
+            $config,                       $sim_tournament_players,
+            $improved_factor_pair_results, $improved_factor_constant
+        )
     );
 
     my $lowest_ranked_always_wins = -1;
@@ -833,14 +841,6 @@ sub cop {
 
     log_info(
         $config,
-        results_string(
-            $config,                       $sim_tournament_players,
-            $improved_factor_pair_results, $improved_factor_constant
-        )
-    );
-
-    log_info(
-        $config,
         sprintf(
             "\nLowest ranked player who can still cash statistically: %d (%s)",
             $lowest_ranked_player_who_can_cash_statistically + 1,
@@ -895,50 +895,80 @@ sub cop {
                 $number_of_repeats{ $player_j->{id} } += $repeats;
             }
 
-            # Control loss weight
-            # Only applies to the player in first
+            if ( $config->{number_of_rounds_remaining} == 1 ) {
 
-            # If:
-            #  Control loss is active for this part of the tournament, and
-            #  We are considering the player in first, and
-            #    the control loss meets the threshold, and
-            #    the opponent is lower ranked than the minimum of:
-            #      the person who can get first in the sims and
-            #      the lowest ranked always winning person
-            #    or, if control loss threshold isn't met
-            #       the person who can get first in the sims and
-            my $lowest_ranked_person_who_can_win =
-              $lowest_ranked_players_who_can_finish_in_nth_statistically->[0];
-            if ( $lowest_ranked_person_who_can_win == 0 ) {
+                # do nothing
+            }
+            elsif ( !$player_j->{is_bye} ) {
 
-                # This player is not gibsonized, but no one reached
-                # them in the simulations, so just make the lowest
-                # ranked person who can win the player in 2nd
-                $lowest_ranked_person_who_can_win = 1;
-            }
-            if (
-                   $control_loss_active
-                && $i == 0
-                && (
-                    (
-                        $control_loss > $adjusted_control_loss_threshold
-                        && $j != min(
-                            $lowest_ranked_person_who_can_win,
-                            $lowest_ranked_always_wins
-                        )
-                    )
-                    || (   $control_loss <= $adjusted_control_loss_threshold
-                        && $j != $lowest_ranked_person_who_can_win )
-                )
-              )
-            {
-                # Prohibitive weights are applied later
-                $control_loss_weight_used = 1;
-            }
-            else {
-                $destinys_child = $j;
-            }
+                # If neither of these blocks are true, that means both
+                # players are gibsonized and we don't have to consider
+                # control loss or placement.
+                my $i_gibson_j_cash =
+                     $i <= $lowest_gibson_rank
+                  && $j > $lowest_gibson_rank
+                  && $j <= $lowest_ranked_player_who_can_cash_absolutely
+                  && $j != ( $number_of_players - 1 );
+                my $neither_player_gibson =
+                  $i > $lowest_gibson_rank && $j > $lowest_gibson_rank;
+                if ($i_gibson_j_cash) {
 
+                    # do nothing
+                }
+                elsif ($neither_player_gibson) {
+
+                    # Control loss weight
+                    # Only applies to the player in first
+
+                  # If:
+                  #  Control loss is active for this part of the tournament, and
+                  #  We are considering the player in first, and
+                  #    the control loss meets the threshold, and
+                  #    the opponent is lower ranked than the minimum of:
+                  #      the person who can get first in the sims and
+                  #      the lowest ranked always winning person
+                  #    or, if control loss threshold isn't met
+                  #       the person who can get first in the sims and
+                    my $lowest_ranked_person_who_can_win =
+                      $lowest_ranked_players_who_can_finish_in_nth_statistically
+                      ->[0];
+                    if ( $lowest_ranked_person_who_can_win == 0 ) {
+
+                        # This player is not gibsonized, but no one reached
+                        # them in the simulations, so just make the lowest
+                        # ranked person who can win the player in 2nd
+                        $lowest_ranked_person_who_can_win = 1;
+                    }
+
+                    # Enforce destiny control for two players if there
+                    # are more than 2 rounds left.
+                    if (   $control_loss_active
+                        && $i == 0 )
+                    {
+                        if (
+                            (
+                                $control_loss >
+                                $adjusted_control_loss_threshold && $j != min(
+                                    $lowest_ranked_person_who_can_win,
+                                    $lowest_ranked_always_wins
+                                )
+                            )
+                            || ( $control_loss <=
+                                   $adjusted_control_loss_threshold
+                                && $j != $lowest_ranked_person_who_can_win )
+                          )
+                        {
+                            $control_loss_weight_used = 1;
+
+                        }
+                        else {
+                            $destinys_child = $j;
+                        }
+
+                        # Prohibitive weights are applied later
+                    }
+                }
+            }
         }
     }
 
@@ -1127,16 +1157,20 @@ sub cop {
                 # If neither of these blocks are true, that means both
                 # players are gibsonized and we don't have to consider
                 # control loss or placement.
-                if (   $i <= $lowest_gibson_rank
-                    && $j > $lowest_gibson_rank
-                    && $j <= $lowest_ranked_player_who_can_cash_absolutely
-                    && $j != ( $number_of_players - 1 ) )
-                {
+                my $i_gibson_j_cash =
+                     $i <= $lowest_gibson_rank
+                  && $j > $lowest_gibson_rank
+                  && $j <= $lowest_ranked_player_who_can_cash_absolutely
+                  && $j != ( $number_of_players - 1 );
+                my $neither_player_gibson =
+                  $i > $lowest_gibson_rank && $j > $lowest_gibson_rank;
+                if ($i_gibson_j_cash) {
+
                     # player i is gibsonized and player j can still cash, they
                     # shouldn't be paired
                     $gibson_weight = PROHIBITIVE_WEIGHT;
                 }
-                elsif ( $i > $lowest_gibson_rank && $j > $lowest_gibson_rank ) {
+                elsif ($neither_player_gibson) {
 
                     # Neither player is gibsonized
                     if (
@@ -1413,7 +1447,7 @@ sub get_lowest_ranked_players_who_can_finish_in_nth {
             )
         );
     }
-
+    log_info( $config, "\n\n *** END PRINTING LOWEST FINISHERS *** \n\n" );
     return \@lowest_ranked_players_who_can_finish_in_nth_statistically,
       \@lowest_ranked_players_who_can_finish_in_nth_absolutely;
 }
@@ -2193,6 +2227,7 @@ sub results_string {
         }
         $result .= sprintf("\n");
     }
+    $result .= sprintf("\n\n *** END PRINTING RESULTS ***\n\n");
     return $result;
 }
 

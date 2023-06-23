@@ -21,8 +21,10 @@ use File::Copy;
 
 our (@ISA) = qw(TSH::PairingCommand);
 
-use constant PROHIBITIVE_WEIGHT => 1000000;
-use constant BYE_PLAYER_ID      => 0;
+use constant PROHIBITIVE_WEIGHT              => 1000000;
+use constant BYE_PLAYER_ID                   => 0;
+use constant INITIAL_FACTOR                  => 1000000;
+use constant SINGULAR_CHILD_ROUNDS_REMAINING => 2;
 
 =pod
 
@@ -742,15 +744,41 @@ sub cop {
     my $lowest_gibson_rank =
       get_lowest_gibson_rank( $config, $sim_tournament_players );
 
+    # Use some large value for max factor
+    # so that the number of rounds remaining
+    # is always used as the factor.
     my $factor_pair_results =
-      sim_factor_pair( $config, $sim_tournament_players, $lowest_gibson_rank );
+      sim_factor_pair( $config, $sim_tournament_players, $lowest_gibson_rank,
+        INITIAL_FACTOR );
+
+    log_info(
+        $config,
+        results_string(
+            $config,                       $sim_tournament_players,
+            $improved_factor_pair_results, INITIAL_FACTOR
+        )
+    );
+
+    my ( $stat_results, $abs_results, ) =
+      get_lowest_ranked_players_who_can_finish_in_nth( $config,
+        $factor_pair_results, $sim_tournament_players );
+
+    # Make the max factor the difference in rank of the lowest player
+    # who can get the highest ranked non-gibsonized rank and the rank
+    # itself at least once in the sims.
+    my $improved_factor_constant =
+      $abs_results->[ $lowest_gibson_rank + 1 ] - ( $lowest_gibson_rank + 1 );
+    my $improved_factor_pair_results = sim_factor_pair(
+        $config,             $sim_tournament_players,
+        $lowest_gibson_rank, $improved_factor_constant
+    );
 
     my $lowest_ranked_always_wins = -1;
     my $control_loss              = -1;
 
     if ( $lowest_gibson_rank < 0 ) {
         ( $lowest_ranked_always_wins, $control_loss ) =
-          get_control_loss( $config, $factor_pair_results,
+          get_control_loss( $config, $improved_factor_pair_results,
             $sim_tournament_players );
     }
 
@@ -793,7 +821,7 @@ sub cop {
         $lowest_ranked_players_who_can_finish_in_nth_absolutely
       )
       = get_lowest_ranked_players_who_can_finish_in_nth( $config,
-        $factor_pair_results, $sim_tournament_players );
+        $improved_factor_pair_results, $sim_tournament_players );
 
     my $lowest_ranked_player_who_can_cash_statistically =
       $lowest_ranked_players_who_can_finish_in_nth_statistically
@@ -806,7 +834,8 @@ sub cop {
     log_info(
         $config,
         results_string(
-            $config, $sim_tournament_players, $factor_pair_results
+            $config,                       $sim_tournament_players,
+            $improved_factor_pair_results, $improved_factor_constant
         )
     );
 
@@ -841,8 +870,9 @@ sub cop {
     }
 
     # Get the number of repeats for each individual player
-    my %number_of_repeats = ();
-
+    my %number_of_repeats        = ();
+    my $destinys_child           = -1;
+    my $control_loss_weight_used = 0;
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player_i = $tournament_players->[$i];
         for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
@@ -864,7 +894,68 @@ sub cop {
                 $number_of_repeats{ $player_i->{id} } += $repeats;
                 $number_of_repeats{ $player_j->{id} } += $repeats;
             }
+
+            # Control loss weight
+            # Only applies to the player in first
+
+            # If:
+            #  Control loss is active for this part of the tournament, and
+            #  We are considering the player in first, and
+            #    the control loss meets the threshold, and
+            #    the opponent is lower ranked than the minimum of:
+            #      the person who can get first in the sims and
+            #      the lowest ranked always winning person
+            #    or, if control loss threshold isn't met
+            #       the person who can get first in the sims and
+            my $lowest_ranked_person_who_can_win =
+              $lowest_ranked_players_who_can_finish_in_nth_statistically->[0];
+            if ( $lowest_ranked_person_who_can_win == 0 ) {
+
+                # This player is not gibsonized, but no one reached
+                # them in the simulations, so just make the lowest
+                # ranked person who can win the player in 2nd
+                $lowest_ranked_person_who_can_win = 1;
+            }
+            if (
+                   $control_loss_active
+                && $i == 0
+                && (
+                    (
+                        $control_loss > $adjusted_control_loss_threshold
+                        && $j != min(
+                            $lowest_ranked_person_who_can_win,
+                            $lowest_ranked_always_wins
+                        )
+                    )
+                    || (   $control_loss <= $adjusted_control_loss_threshold
+                        && $j != $lowest_ranked_person_who_can_win )
+                )
+              )
+            {
+                # Prohibitive weights are applied later
+                $control_loss_weight_used = 1;
+            }
+            else {
+                $destinys_child = $j;
+            }
+
         }
+    }
+
+    if ( $destinys_child >= 0 ) {
+        log_info(
+            $config,
+            sprintf(
+                "\nDestiny's child is %s\n\n",
+                player_string(
+                    $tournament_players->[$destinys_child],
+                    $destinys_child
+                )
+            )
+        );
+    }
+    else {
+        log_info( $config, sprintf("\nThere is no destiny's child\n\n") );
     }
 
     my $class_prize_pairings =
@@ -915,11 +1006,9 @@ sub cop {
         )
     );
 
-    my $max_weight               = 0;
-    my @edges                    = ();
-    my %weight_hash              = ();
-    my $destinys_child           = -1;
-    my $control_loss_weight_used = 0;
+    my $max_weight  = 0;
+    my @edges       = ();
+    my %weight_hash = ();
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player_i = $tournament_players->[$i];
         for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
@@ -950,7 +1039,6 @@ sub cop {
             my $both_cannot_get_payout_statistically =
                  $i > $lowest_ranked_player_who_can_cash_statistically
               && $j > $lowest_ranked_player_who_can_cash_statistically;
-
 
             my $number_of_times_played =
               get_number_of_times_played( $player_i->{id},
@@ -986,7 +1074,9 @@ sub cop {
 
             # If neither player can cash or player i is gibsonized,
             # rank difference weight should count for very little.
-            if ( $both_cannot_get_payout_absolutely || $i <= $lowest_gibson_rank ) {
+            if (   $both_cannot_get_payout_absolutely
+                || $i <= $lowest_gibson_rank )
+            {
                 $rank_difference_weight = ( $j - $i );
             }
             else {
@@ -1103,50 +1193,25 @@ sub cop {
                         }
                     }
 
-                    # Control loss weight
-                    # Only applies to the player in first
-
-                  # If:
-                  #  Control loss is active for this part of the tournament, and
-                  #  We are considering the player in first, and
-                  #    the control loss meets the threshold, and
-                  #    the opponent is lower ranked than the minimum of:
-                  #      the person who can get first in the sims and
-                  #      the lowest ranked always winning person
-                  #    or, if control loss threshold isn't met
-                  #       the person who can get first in the sims and
-                    my $lowest_ranked_person_who_can_win =
-                      $lowest_ranked_players_who_can_finish_in_nth_statistically
-                      ->[0];
-                    if ( $lowest_ranked_person_who_can_win == 0 ) {
-
-                        # This player is not gibsonized, but no one reached
-                        # them in the simulations, so just make the lowest
-                        # ranked person who can win the player in 2nd
-                        $lowest_ranked_person_who_can_win = 1;
-                    }
+                    # Enforce destiny control for two players if there
+                    # are more than 2 rounds left.
                     if (
                            $control_loss_active
                         && $i == 0
                         && (
                             (
-                                $control_loss >
-                                $adjusted_control_loss_threshold && $j != min(
-                                    $lowest_ranked_person_who_can_win,
-                                    $lowest_ranked_always_wins
-                                )
+                                   $j != $destinys_child
+                                && $config->{number_of_rounds_remaining} <=
+                                SINGULAR_CHILD_ROUNDS_REMAINING
                             )
-                            || ( $control_loss <=
-                                   $adjusted_control_loss_threshold
-                                && $j != $lowest_ranked_person_who_can_win )
+                            || (   $j != $destinys_child
+                                && $j != $destinys_child - 1
+                                && $config->{number_of_rounds_remaining} >
+                                SINGULAR_CHILD_ROUNDS_REMAINING )
                         )
                       )
                     {
-                        $control_loss_weight      = PROHIBITIVE_WEIGHT;
-                        $control_loss_weight_used = 1;
-                    }
-                    else {
-                        $destinys_child = $j;
+                        $control_loss_weight = PROHIBITIVE_WEIGHT;
                     }
                 }
             }
@@ -1254,7 +1319,7 @@ sub get_number_of_times_played {
 }
 
 sub get_lowest_ranked_players_who_can_finish_in_nth {
-    my ( $config, $factor_pair_results, $sim_tournament_players ) = @_;
+    my ( $config, $improved_factor_pair_results, $sim_tournament_players ) = @_;
 
     my $sim_number_of_players = scalar @{$sim_tournament_players};
 
@@ -1288,7 +1353,8 @@ sub get_lowest_ranked_players_who_can_finish_in_nth {
             my $sum = 0;
             for ( my $i = 0 ; $i <= $final_rank_index ; $i++ ) {
                 $sum +=
-                  get_tournament_result( $factor_pair_results, $player, $i );
+                  get_tournament_result( $improved_factor_pair_results,
+                    $player, $i );
             }
             my $place_percentage = $sum / $config->{number_of_sims};
             if ( $place_percentage > $adjusted_hopefulness ) {
@@ -1353,7 +1419,7 @@ sub get_lowest_ranked_players_who_can_finish_in_nth {
 }
 
 sub get_control_loss {
-    my ( $config, $factor_pair_results, $sim_tournament_players ) = @_;
+    my ( $config, $improved_factor_pair_results, $sim_tournament_players ) = @_;
 
     my $sim_number_of_players = scalar @{$sim_tournament_players};
 
@@ -1574,7 +1640,8 @@ sub get_number_of_sims_for_thread {
 
 sub sim_factor_pair_worker {
     my ( $config, $sim_tournament_players, $lowest_gibson_rank,
-        $number_of_sims ) = @_;
+        $number_of_sims, $max_factor )
+      = @_;
     my $results = new_tournament_results( scalar(@$sim_tournament_players) );
     for ( my $i = 0 ; $i < $number_of_sims ; $i++ ) {
         for (
@@ -1583,9 +1650,10 @@ sub sim_factor_pair_worker {
             $remaining_rounds--
           )
         {
-            my $pairings =
-              factor_pair( $sim_tournament_players, $remaining_rounds,
-                $lowest_gibson_rank );
+            my $pairings = factor_pair(
+                $sim_tournament_players, $remaining_rounds,
+                $lowest_gibson_rank,     $max_factor
+            );
             my $max_spread =
               $config->{gibson_spreads}->[ $remaining_rounds - 1 ];
             play_round( $pairings, $sim_tournament_players, -1, $max_spread );
@@ -1601,7 +1669,8 @@ sub sim_factor_pair_worker {
 }
 
 sub sim_factor_pair_manager {
-    my ( $config, $sim_tournament_players, $lowest_gibson_rank ) = @_;
+    my ( $config, $sim_tournament_players, $lowest_gibson_rank, $max_factor ) =
+      @_;
 
     # Create an array to hold the thread objects
     my @threads = ();
@@ -1617,11 +1686,11 @@ sub sim_factor_pair_manager {
           threads->create(
             \&sim_factor_pair_worker,   $config,
             $copied_tournament_players, $lowest_gibson_rank,
-            $number_of_sims_for_thread
+            $number_of_sims_for_thread, $max_factor
           );
     }
 
-    my $factor_pair_results =
+    my $improved_factor_pair_results =
       new_tournament_results( scalar(@$sim_tournament_players) );
 
     # Wait for the threads to finish and collect the results
@@ -1629,20 +1698,21 @@ sub sim_factor_pair_manager {
         my $thread_result = $thread->join();
         for (
             my $i = 0 ;
-            $i < scalar( @{ $factor_pair_results->{array} } ) ;
+            $i < scalar( @{ $improved_factor_pair_results->{array} } ) ;
             $i++
           )
         {
-            $factor_pair_results->{array}->[$i] +=
+            $improved_factor_pair_results->{array}->[$i] +=
               $thread_result->{array}->[$i];
         }
     }
-    $factor_pair_results->{count} = $config->{number_of_sims};
-    return $factor_pair_results;
+    $improved_factor_pair_results->{count} = $config->{number_of_sims};
+    return $improved_factor_pair_results;
 }
 
 sub sim_factor_pair {
-    my ( $config, $sim_tournament_players, $lowest_gibson_rank ) = @_;
+    my ( $config, $sim_tournament_players, $lowest_gibson_rank, $max_factor ) =
+      @_;
     if ( $config->{number_of_threads} > 1 ) {
         log_info(
             $config,
@@ -1650,14 +1720,12 @@ sub sim_factor_pair {
                 $config->{number_of_threads} )
         );
         return sim_factor_pair_manager( $config, $sim_tournament_players,
-            $lowest_gibson_rank );
+            $lowest_gibson_rank, $max_factor );
     }
     else {
         log_info( $config, sprintf("Single threading factor pair\n") );
-        return sim_factor_pair_worker(
-            $config,             $sim_tournament_players,
-            $lowest_gibson_rank, $config->{number_of_sims}
-        );
+        return sim_factor_pair_worker( $config, $sim_tournament_players,
+            $lowest_gibson_rank, $config->{number_of_sims}, $max_factor );
     }
 }
 
@@ -1709,7 +1777,12 @@ sub sim_player_always_wins_worker {
               map { $sim_tournament_players->[$_]->{index} => $_ }
               0 .. scalar(@$sim_tournament_players) - 1;
             my $pairings =
-              factor_pair( $sim_tournament_players, $remaining_rounds, -1 );
+
+              # use initial factor here since we are only
+              # concerned about if this player can get first or
+              # not as opposed to equitable pairings for all players
+              factor_pair( $sim_tournament_players, $remaining_rounds, -1,
+                INITIAL_FACTOR );
             my $max_spread = $config->{gibson_spreads}->[ -$remaining_rounds ];
             play_round( $pairings, $sim_tournament_players,
                 $player_index_to_rank{$player_in_nth_index}, $max_spread );
@@ -1751,7 +1824,7 @@ sub sim_player_always_wins_manager {
           );
     }
 
-    my $factor_pair_results =
+    my $improved_factor_pair_results =
       new_tournament_results( scalar(@$sim_tournament_players) );
 
     my $pwf_wins = 0;
@@ -1818,8 +1891,8 @@ sub sim_player_always_wins {
                 );
             }
             ( $pwf_wins, $fp_wins ) =
-              sim_player_always_wins_manager( $config, $sim_tournament_players,
-                $player_in_nth_index );
+              sim_player_always_wins_manager( $config,
+                $sim_tournament_players, $player_in_nth_index );
         }
         else {
             if ( $player_in_nth_rank_index == 1 ) {
@@ -1845,12 +1918,14 @@ sub play_round {
             if ( $tournament_players->[ $pairing->[$j] ]->{is_bye} ) {
 
                 # Player gets a bye
-                $tournament_players->[ $pairing->[ 1 - $j ] ]->{spread} += 50;
-                $tournament_players->[ $pairing->[ 1 - $j ] ]->{wins}   += 2;
+                $tournament_players->[ $pairing->[ 1 - $j ] ]->{spread} +=
+                  50;
+                $tournament_players->[ $pairing->[ 1 - $j ] ]->{wins} += 2;
                 next outer;
             }
         }
-        my $spread = int( $max_spread / 2 ) - int( rand( $max_spread + 1 ) );
+        my $spread =
+          int( $max_spread / 2 ) - int( rand( $max_spread + 1 ) );
         if ( $forced_win_player >= 0 ) {
             if ( $pairing->[0] == $forced_win_player ) {
                 $spread = abs($spread) + 1;
@@ -1888,7 +1963,7 @@ sub create_times_played_key {
 }
 
 sub factor_pair {
-    my ( $sim_tournament_players, $nrl, $lowest_gibson_rank ) = @_;
+    my ( $sim_tournament_players, $nrl, $lowest_gibson_rank, $max_factor ) = @_;
 
     my $number_of_players = scalar(@$sim_tournament_players);
 
@@ -1901,6 +1976,10 @@ sub factor_pair {
 
     if ( $nrl > $number_of_players_to_factor / 2 ) {
         $nrl = $number_of_players_to_factor / 2;
+    }
+
+    if ( $nrl > $max_factor ) {
+        $nrl = $max_factor;
     }
 
     # This assumes players are already sorted
@@ -2095,10 +2174,11 @@ sub player_string {
 }
 
 sub results_string {
-    my ( $config, $tournament_players, $results ) = @_;
+    my ( $config, $tournament_players, $results, $factor_constant ) = @_;
     sort_tournament_players_by_record($tournament_players);
     my $number_of_players = scalar @{$tournament_players};
-    my $result            = "\n\nResults\n\n";
+    my $result =
+      sprintf( "\n\nResults (factor constant %d)\n\n", $factor_constant );
     $result .= sprintf( "%47s", ("") );
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         $result .= sprintf( "%-7s", ( $i + 1 ) );

@@ -389,7 +389,7 @@ sub test_t_file_for_autoplay_round {
     $cop_config->{log_filename} .= '.autoplay';
     printf( "Logging to %s\n", $cop_config->{log_filename} );
 
-    my ($pairings, $warning) = cop(
+    my ( $pairings, $warning ) = cop(
         $cop_config,        $tournament_players,
         $times_played_hash, $previous_pairing_hash
     );

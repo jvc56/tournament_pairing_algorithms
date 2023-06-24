@@ -345,7 +345,7 @@ sub get_config_for_t_file_round {
 
     return create_cop_config(
         $start_round, $final_round,
-        10,           10,
+        100,          100,
         $lowest_ranked_payout, [ 300, 250, 200 ],
         [0.25], $final_round - 4,
         [ 0, 0.1, 0.05, 0.01 ], $log_filename
@@ -389,7 +389,7 @@ sub test_t_file_for_autoplay_round {
     $cop_config->{log_filename} .= '.autoplay';
     printf( "Logging to %s\n", $cop_config->{log_filename} );
 
-    my ($pairings, $warning) = cop(
+    my ( $pairings, $warning ) = cop(
         $cop_config,        $tournament_players,
         $times_played_hash, $previous_pairing_hash
     );

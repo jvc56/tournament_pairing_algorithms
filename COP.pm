@@ -1234,9 +1234,24 @@ sub cop {
                         && $i == 0
                         && (
                             (
-                                   $j != $destinys_child
-                                && $config->{number_of_rounds_remaining} <=
+                                (
+                                       $j != $destinys_child
+                                    && $config->{number_of_rounds_remaining} <=
+                                    SINGULAR_CHILD_ROUNDS_REMAINING
+                                )
+                            )
+                            || (
+                                (
+                                       $j == $destinys_child
+                                    || $j == $destinys_child - 1
+                                )
+                                && $config->{number_of_rounds_remaining} >
                                 SINGULAR_CHILD_ROUNDS_REMAINING
+                                && $previous_pairing_hash->{$times_played_key}
+
+                                # If destinys child is second place,
+                                # they are the only player who can play first
+                                && $j != 1
                             )
                             || (   $j != $destinys_child
                                 && $j != $destinys_child - 1

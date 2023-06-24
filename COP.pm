@@ -991,7 +991,7 @@ sub cop {
     my $class_prize_pairings =
       get_class_prize_pairings( $config, $tournament_players,
         $lowest_ranked_player_who_can_cash_absolutely,
-        $number_of_players );
+        $lowest_gibson_rank, $number_of_players );
 
     if ( $config->{number_of_rounds_remaining} == 1
         && scalar keys %{$class_prize_pairings} > 0 )
@@ -1575,10 +1575,21 @@ sub can_player_reach_rank {
       <= $config->{number_of_rounds_remaining};
 }
 
+sub log_ineligible_classes {
+    my ( $config, $ineligible_classes, $reason ) = @_;
+    my $ineliglbe_classes_log = "Ineligible classes ($reason): ";
+    foreach my $class ( sort keys %{$ineligible_classes} ) {
+        $ineliglbe_classes_log .= "$class,";
+    }
+    chop($ineliglbe_classes_log);
+    $ineliglbe_classes_log .= "\n";
+    log_info( $config, $ineliglbe_classes_log );
+}
+
 sub get_class_prize_pairings {
     my ( $config, $tournament_players,
         $lowest_ranked_player_who_can_cash_absolutely,
-        $number_of_players )
+        $lowest_gibson_rank, $number_of_players )
       = @_;
 
     my %class_pairings_remaining = ();
@@ -1588,6 +1599,40 @@ sub get_class_prize_pairings {
     }
     my %previous_class_player_ranks = ();
     my %class_prize_pairings        = ();
+
+    # Do not make any forced pairings
+    # if any player in that class can cash.
+    my %ineligible_classes = ();
+    for (
+        my $i = 0 ;
+        $i <= $lowest_ranked_player_who_can_cash_absolutely ;
+        $i++
+      )
+    {
+        $ineligible_classes{ $tournament_players->[$i]->{class} } = 1;
+    }
+
+    log_ineligible_classes( $config, \%ineligible_classes, 'Can cash' );
+
+    # Determine if any players are dragged into the KOTH
+    # win group. If they are, that class should not be
+    # paired with class prizes as a priority.
+    for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
+        for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
+
+            if (   $i > $lowest_gibson_rank
+                && $i <= $lowest_ranked_player_who_can_cash_absolutely
+                && $lowest_gibson_rank % 2 != $i % 2
+                && $i + 1 == $j )
+            {
+                $ineligible_classes{ $tournament_players->[$j]->{class} } = 1;
+            }
+        }
+    }
+
+    log_ineligible_classes( $config, \%ineligible_classes,
+        'Even the odd win group' );
+
     for (
         my $i = $lowest_ranked_player_who_can_cash_absolutely + 1 ;
         $i < $number_of_players ;
@@ -1600,6 +1645,7 @@ sub get_class_prize_pairings {
             if (
                    $player_i->{class} ne $config->{top_class}
                 && $player_i->{class} eq $player_j->{class}
+                && !$ineligible_classes{ $player_i->{class} }
                 && $class_pairings_remaining{ $player_i->{class} } > 0
                 && ( !defined $class_prize_pairings{$i} )
                 && ( !defined $class_prize_pairings{$j} )
@@ -2211,8 +2257,12 @@ sub results_string {
     my ( $config, $tournament_players, $results, $factor_constant ) = @_;
     sort_tournament_players_by_record($tournament_players);
     my $number_of_players = scalar @{$tournament_players};
-    my $result =
-      sprintf( "\n\nResults (factor constant %d)\n\n", $factor_constant );
+    my $factor_strategy   = 'number of rounds remaining';
+    if ( $factor_constant != INITIAL_FACTOR ) {
+        $factor_strategy =
+          "minimum of number of rounds remaining and $factor_constant";
+    }
+    my $result = sprintf( "\n\nResults (factor = %s)\n\n", $factor_strategy );
     $result .= sprintf( "%47s", ("") );
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         $result .= sprintf( "%-7s", ( $i + 1 ) );

@@ -25,6 +25,7 @@ use constant PROHIBITIVE_WEIGHT              => 1000000;
 use constant BYE_PLAYER_ID                   => 0;
 use constant INITIAL_FACTOR                  => 1000000;
 use constant SINGULAR_CHILD_ROUNDS_REMAINING => 2;
+use constant UNDEFINED_CLASS                 => 'UNDEFINED_CLASS';
 
 =pod
 
@@ -203,7 +204,10 @@ sub Run ($$@) {
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player       = $players[$i];
         my $player_class = $player->Class();
-        my $player_id    = $player->ID();
+        if ( !defined $player_class ) {
+            $player_class = UNDEFINED_CLASS;
+        }
+        my $player_id = $player->ID();
         if ( $player_id == 1 ) {
             $top_class = $player_class;
         }
@@ -217,9 +221,9 @@ sub Run ($$@) {
             }
             my $opponent_id = $opponent->ID();
             my $number_of_times_played =
-              $player->CountRoundRepeats( $opponent, $round_to_pair1 - 1 );
+              $player->CountRoundRepeats( $opponent, $sr0 );
             my $number_of_times_played_excluding_last_round =
-              $player->CountRoundRepeats( $opponent, $round_to_pair1 - 2 );
+              $player->CountRoundRepeats( $opponent, $sr0 - 1 );
 
             my $played_last_round = $number_of_times_played -
               $number_of_times_played_excluding_last_round;
@@ -259,7 +263,7 @@ sub Run ($$@) {
         push @tournament_players, new_tournament_player(
             $player_id,
             $player->PrettyName(),
-            $player->Class(),
+            $player_class,
             $player_index,
 
             # Wins count as 2 and draws count as 1 to
@@ -699,6 +703,26 @@ sub prepaired_players_to_string {
     return $ret;
 }
 
+sub previous_pairings_to_string {
+    my ( $config, $tournament_players, $number_of_players, $previous_pairing_hash )
+      = @_;
+    my $res = "\nPrevious Pairings\n\n";
+    for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
+        my $player_i = $tournament_players->[$i];
+        for ( my $j = $i + 1 ; $j < $number_of_players ; $j++ ) {
+            my $player_j = $tournament_players->[$j];
+            my $times_played_key =
+              create_times_played_key( $player_i->{id}, $player_j->{id} );
+            if ( $previous_pairing_hash->{$times_played_key} ) {
+                $res .= sprintf( "%s vs %s\n",
+                    player_string( $player_i, $i ),
+                    player_string( $player_j, $j ) );
+            }
+        }
+    }
+    return $res . "\n\n";
+}
+
 # Pairing and simming
 
 sub cop {
@@ -731,6 +755,14 @@ sub cop {
         $config,
         sprintf( "\n\nStandings\n\n%s\n",
             tournament_players_string($tournament_players) )
+    );
+
+    log_info(
+        $config,
+        previous_pairings_to_string(
+            $config,            $tournament_players,
+            $number_of_players, $previous_pairing_hash
+        )
     );
 
     # Truncate the players for simulations.
@@ -1251,7 +1283,7 @@ sub cop {
 
                                 # If destinys child is second place,
                                 # they are the only player who can play first
-                                && $j != 1
+                                && $destinys_child != 1
                             )
                             || (   $j != $destinys_child
                                 && $j != $destinys_child - 1
@@ -2249,8 +2281,12 @@ sub convert_pairings_to_id_pairings {
 
 sub player_string {
     my ( $player, $rank_index ) = @_;
+    my $player_class = $player->{class};
+    if ( $player_class eq UNDEFINED_CLASS ) {
+        $player_class = '';
+    }
     my $name_and_index = sprintf( "%-6s %-23s",
-        '(#' . ( $player->{id} ) . ( $player->{class} ) . ')',
+        '(#' . ( $player->{id} ) . ($player_class) . ')',
         $player->{name} );
     my $wins_string = sprintf( "%0.1f", $player->{wins} / 2 );
     my $sign        = '+';

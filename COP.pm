@@ -107,6 +107,7 @@ sub Run ($$@) {
         return 0;
     }
 
+    my $last_paired_round0 = $dp->LastPairedRound0();
     my $round_to_pair0 = $dp->FirstUnpairedRound0();
 
     my $timestamp     = get_timestamp();
@@ -221,9 +222,9 @@ sub Run ($$@) {
             }
             my $opponent_id = $opponent->ID();
             my $number_of_times_played =
-              $player->CountRoundRepeats( $opponent, $sr0 );
+              $player->CountRoundRepeats( $opponent, $last_paired_round0 );
             my $number_of_times_played_excluding_last_round =
-              $player->CountRoundRepeats( $opponent, $sr0 - 1 );
+              $player->CountRoundRepeats( $opponent, $last_paired_round0 - 1 );
 
             my $played_last_round = $number_of_times_played -
               $number_of_times_played_excluding_last_round;

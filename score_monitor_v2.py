@@ -104,7 +104,7 @@ async def main(gcg_filename, score_output_filename, unseen_output_filename, coun
             else:
                 final_scores_string += str(final_scores[team_name]).ljust(3)
 
-        count_string = str(unseen_tile_count).rjust(10) + " tiles\n"
+        count_string = str(unseen_tile_count) + " tiles\n"
         count_string += str(unseen_vowel_count).rjust(2) + " vowels | "
         count_string += str(unseen_tile_count - unseen_vowel_count).rjust(2) + " consonants"
 

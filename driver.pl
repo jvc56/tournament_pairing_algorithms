@@ -207,7 +207,7 @@ sub create_cop_config {
     return {
         log_filename                => $log_filename,
         html_log_filename           => $log_filename . '.html',
-        number_of_threads           => 1,
+        number_of_threads           => 4,
         number_of_sims              => $number_of_sims,
         number_of_rounds            => $final_round,
         round_to_pair               => $start_round,
@@ -348,7 +348,7 @@ sub get_config_for_t_file_round {
         100,          100,
         $lowest_ranked_payout, [ 300, 250, 200 ],
         [0.25], $final_round - 4,
-        [ 0, 0.1, 0.05, 0.01 ], $log_filename
+        [ 0, 0.1, 0.05, 0.015 ], $log_filename
     );
 }
 

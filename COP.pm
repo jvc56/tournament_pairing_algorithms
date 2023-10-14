@@ -1108,7 +1108,7 @@ sub cop {
                 $player_j->{id}, $times_played_hash );
 
             my $repeat_weight = int( ( $number_of_times_played * 2 ) *
-                  ( ( $number_of_players / 4 )**3 ) );
+                  ( ( $number_of_players / 3 )**3 ) );
 
             my $gibson_weight = 0;
             my $times_played_key =

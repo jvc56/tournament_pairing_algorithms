@@ -108,7 +108,7 @@ sub Run ($$@) {
     }
 
     my $last_paired_round0 = $dp->LastPairedRound0();
-    my $round_to_pair0 = $dp->FirstUnpairedRound0();
+    my $round_to_pair0     = $dp->FirstUnpairedRound0();
 
     my $timestamp     = get_timestamp();
     my $division_name = $dp->Name();
@@ -705,8 +705,10 @@ sub prepaired_players_to_string {
 }
 
 sub previous_pairings_to_string {
-    my ( $config, $tournament_players, $number_of_players, $previous_pairing_hash )
-      = @_;
+    my (
+        $config,            $tournament_players,
+        $number_of_players, $previous_pairing_hash
+    ) = @_;
     my $res = "\nPrevious Pairings\n\n";
     for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
         my $player_i = $tournament_players->[$i];
@@ -2052,8 +2054,7 @@ sub play_round {
                 next outer;
             }
         }
-        my $spread =
-          int( $max_spread / 2 ) - int( rand( $max_spread + 1 ) );
+        my $spread = $max_spread - int( rand( ( $max_spread * 2 ) + 1 ) );
         if ( $forced_win_player >= 0 ) {
             if ( $pairing->[0] == $forced_win_player ) {
                 $spread = abs($spread) + 1;

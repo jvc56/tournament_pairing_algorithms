@@ -276,7 +276,7 @@ sub get_tsh_config_info {
         elsif ( !( $line =~ /class/ )
             && $line =~ /^prize\s+rank\s+(\d+)\s+(\w+)/ )
         {
-            my $rank                   = $1;
+            my $rank                   = $1 + 1;
             my $division               = uc($2);
             my $number_of_times_played = 0;
             if ( !exists $lowest_ranked_payouts{$division}
@@ -345,8 +345,8 @@ sub get_config_for_t_file_round {
 
     return create_cop_config(
         $start_round, $final_round,
-        100,          100,
-        $lowest_ranked_payout, [ 300, 250, 200 ],
+        10000,          1000,
+        $lowest_ranked_payout, [ 250, 250, 200 ],
         [0.25], $final_round - 4,
         [ 0, 0.1, 0.05, 0.015 ], $log_filename
     );

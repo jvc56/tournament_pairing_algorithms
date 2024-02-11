@@ -192,6 +192,8 @@ sub Run ($$@) {
         $number_of_threads = 1;
     }
 
+    my $disallow_repeat_byes = !!$tournament->Config()->Value('disallow_repeat_byes');
+
     my %times_played          = ();
     my %previous_pairing_hash = ();
 
@@ -305,6 +307,7 @@ sub Run ($$@) {
         hopefulness =>
           extend_tsh_config_array( $hopefulness, $number_of_rounds ),
         bye_active => 0,
+        disallow_repeat_byes => $disallow_repeat_byes,
     };
 
     my ( $id_pairings, $warnings ) = cop(
@@ -652,11 +655,18 @@ sub config_to_string {
         $config->{control_loss_activation_round} + 1 );
     $ret .= sprintf( "%31s %s\n", "Threads:", $config->{number_of_threads} );
 
-    my $active_bye_text = 'FALSE';
+    my $active_bye_text = 'INACTIVE';
     if ( $config->{bye_active} ) {
         $active_bye_text = 'ACTIVE';
     }
     $ret .= sprintf( "%31s %s\n", "Bye Active:", $active_bye_text );
+
+    my $active_drb_text = 'INACTIVE';
+    if ( $config->{disallow_repeat_byes} ) {
+        $active_drb_text = 'ACTIVE';
+    }
+    $ret .= sprintf( "%31s %s\n", "Disallow Repeat Byes:", $active_drb_text );
+
 
     # Write a marker designating which array values are being used
     # for this round.
@@ -734,7 +744,6 @@ sub cop {
         $times_played_hash, $previous_pairing_hash
     ) = @_;
 
-    log_info( $config, config_to_string($config) );
 
     log_info( $config,
         prepaired_players_to_string( $config, $tournament_players ) );
@@ -751,6 +760,8 @@ sub cop {
         $number_of_players = scalar(@$tournament_players);
         $config->{bye_active} = 1;
     }
+
+    log_info( $config, config_to_string($config) );
 
     sort_tournament_players_by_record($tournament_players);
 
@@ -1133,6 +1144,12 @@ sub cop {
             elsif ( $number_of_times_played > 0 ) {
                 $repeat_weight += ( $number_of_repeats{ $player_i->{id} } +
                       $number_of_repeats{ $player_j->{id} } ) * 2;
+            }
+
+            # If the player has had a bye and repeat byes are not allowed,
+            # prevent this pairing
+            if ($player_j->{is_bye} && $number_of_times_played > 0 && $config->{disallow_repeat_byes}) {
+                $repeat_weight += PROHIBITIVE_WEIGHT;
             }
 
             my $rank_difference_weight;

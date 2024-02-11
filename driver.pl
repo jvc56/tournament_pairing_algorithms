@@ -225,6 +225,7 @@ sub create_cop_config {
           extend_tsh_config_array( $control_loss_thresholds, $final_round ),
         control_loss_activation_round => $control_loss_activation_round,
         hopefulness => extend_tsh_config_array( $hopefulness, $final_round ),
+        disallow_repeat_byes => 1,
     };
 }
 

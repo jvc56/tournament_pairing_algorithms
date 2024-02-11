@@ -22,27 +22,31 @@ def get_gcg_info(gcg_filename):
     previous_played_tiles = ""
     for line in lines:
             print("\n\nline: ", line.strip())
-            match = re.search("#player1\s+(\w+)", line)
+            # Set player 1's name
+            match = re.search("#player1\s+(\S+)", line)
             if match is not None and match.group(1) is not None and team_going_first == "":
                 name = match.group(1).strip()
                 team_going_first = name
                 final_scores[name] = 0
                 print("team going first: " + team_going_first)
 
-            match = re.search("#player2\s+(\w+)", line)
+            # Set player 2's name
+            match = re.search("#player2\s+(\S+)", line)
             if match is not None and match.group(1) is not None:
                 name = match.group(1).strip()
                 final_scores[name] = 0
                 print("team going second: " + name)
             
-            match = re.search("^>(\w+).*\D(\d+)$", line)
+            # Set final score
+            match = re.search("^>([^:]+).*\D(\d+)$", line)
             if match is not None and match.group(1) is not None and match.group(2) is not None:
                 name = match.group(1).strip()
                 score = match.group(2).strip()
                 final_scores[name] = int(score)
                 print("final score: %s has %s" % (name, score))
 
-            match = re.search("^>\w+:\s+[\w\?]+\s+\w+\s+([\w\.]+)", line)
+            # Parse a tile placement move
+            match = re.search("^>[^:]+:\s+[\w\?]+\s+\w+\s+([\w\.]+)", line)
             if match is not None and match.group(1) is not None:
                 played_tiles = match.group(1).strip()
                 print("played_tiles: ", played_tiles)
@@ -54,7 +58,7 @@ def get_gcg_info(gcg_filename):
                             bag[letter] -= 1
                 previous_played_tiles = played_tiles
 
-            match = re.search("^>\w+:\s+[\w\?]+\s+--", line)
+            match = re.search("^>[^:]+:\s+[\w\?]+\s+--", line)
             if match is not None:
                 print("lost challenge detected, adding tiles back")
                 print("previous_played_tiles: ", previous_played_tiles)
@@ -99,6 +103,7 @@ async def main(gcg_filename, score_output_filename, unseen_output_filename, coun
 
         final_scores_string = ""
         for team_name in final_scores:
+            print("team name: " + team_name)
             if team_name == team_going_first:
                 final_scores_string += str(final_scores[team_name]).rjust(3) + " - "
             else:

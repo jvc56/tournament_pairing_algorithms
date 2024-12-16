@@ -91,6 +91,8 @@ tournament with the specified parsed arguments.
 
 =cut
 
+my $cop_api_protos_initialized = 0;
+
 sub Run ($$@) {
     my $this       = shift;
     my $tournament = shift;
@@ -192,102 +194,107 @@ sub Run ($$@) {
     my $disallow_repeat_byes = !!$tournament->Config()->Value('disallow_repeat_byes');
 
     if ($tournament->Config()->Value('use_cop_api')) {
-        my $proto_definitions = <<'EOT';
-syntax = "proto2";
-package ipc;
+        if (!$cop_api_protos_initialized) {
+            my $proto_definitions = <<'EOT';
+            syntax = "proto2";
+            package ipc;
 
-enum PairMethod {
-COP = 0;
-}
+            enum PairMethod {
+            COP = 0;
+            }
 
-message RoundPairings {
-repeated int32 pairings = 1;
-}
+            message RoundPairings {
+            repeated int32 pairings = 1;
+            }
 
-message RoundResults {
-repeated int32 results = 1;
-}
+            message RoundResults {
+            repeated int32 results = 1;
+            }
 
-message PairRequest {
-optional PairMethod pair_method = 1;
-repeated string player_names = 2;
-repeated int32 player_classes = 3;
-repeated RoundPairings division_pairings = 4;
-repeated RoundResults division_results = 5;
-repeated int32 class_prizes = 6;
-optional int32 gibson_spread = 7;
-optional double control_loss_threshold = 8;
-optional double hopefulness_threshold = 9;
-optional int32 all_players = 10;
-optional int32 valid_players = 11;
-optional int32 rounds = 12;
-optional int32 place_prizes = 13;
-optional int32 division_sims = 14;
-optional int32 control_loss_sims = 15;
-optional bool use_control_loss = 16;
-optional bool allow_repeat_byes = 17;
-repeated int32 removed_players = 18;
-optional int64 seed = 19;
-}
+            message PairRequest {
+            optional PairMethod pair_method = 1;
+            repeated string player_names = 2;
+            repeated int32 player_classes = 3;
+            repeated RoundPairings division_pairings = 4;
+            repeated RoundResults division_results = 5;
+            repeated int32 class_prizes = 6;
+            optional int32 gibson_spread = 7;
+            optional double control_loss_threshold = 8;
+            optional double hopefulness_threshold = 9;
+            optional int32 all_players = 10;
+            optional int32 valid_players = 11;
+            optional int32 rounds = 12;
+            optional int32 place_prizes = 13;
+            optional int32 division_sims = 14;
+            optional int32 control_loss_sims = 15;
+            optional bool use_control_loss = 16;
+            optional bool allow_repeat_byes = 17;
+            repeated int32 removed_players = 18;
+            optional int64 seed = 19;
+            }
 
-enum PairError {
-SUCCESS = 0;
-PLAYER_COUNT_INSUFFICIENT = 1;
-ROUND_COUNT_INSUFFICIENT = 2;
-PLAYER_COUNT_TOO_LARGE = 3;
-PLAYER_NAME_COUNT_INSUFFICIENT = 4;
-PLAYER_NAME_EMPTY = 5;
-MORE_PAIRINGS_THAN_ROUNDS = 6;
-ALL_ROUNDS_PAIRED = 7;
-INVALID_ROUND_PAIRINGS_COUNT = 8;
-PLAYER_INDEX_OUT_OF_BOUNDS = 9;
-UNPAIRED_PLAYER = 10;
-INVALID_PAIRING = 11;
-MORE_RESULTS_THAN_ROUNDS = 12;
-MORE_RESULTS_THAN_PAIRINGS = 13;
-INVALID_ROUND_RESULTS_COUNT = 14;
-INVALID_PLAYER_CLASS_COUNT = 15;
-INVALID_PLAYER_CLASS = 16;
-INVALID_CLASS_PRIZE = 17;
-INVALID_GIBSON_SPREAD = 18;
-INVALID_CONTROL_LOSS_THRESHOLD = 19;
-INVALID_HOPEFULNESS_THRESHOLD = 20;
-INVALID_DIVISION_SIMS = 21;
-INVALID_CONTROL_LOSS_SIMS = 22;
-INVALID_PLACE_PRIZES = 23;
-INVALID_REMOVED_PLAYER = 24;
-INVALID_VALID_PLAYER_COUNT = 25;
-MIN_WEIGHT_MATCHING = 26;
-INVALID_PAIRINGS_LENGTH = 27;
-OVERCONSTRAINED = 28;
-REQUEST_TO_JSON_FAILED = 29;
-TIMEOUT = 30;
-}
+            enum PairError {
+            SUCCESS = 0;
+            PLAYER_COUNT_INSUFFICIENT = 1;
+            ROUND_COUNT_INSUFFICIENT = 2;
+            PLAYER_COUNT_TOO_LARGE = 3;
+            PLAYER_NAME_COUNT_INSUFFICIENT = 4;
+            PLAYER_NAME_EMPTY = 5;
+            MORE_PAIRINGS_THAN_ROUNDS = 6;
+            ALL_ROUNDS_PAIRED = 7;
+            INVALID_ROUND_PAIRINGS_COUNT = 8;
+            PLAYER_INDEX_OUT_OF_BOUNDS = 9;
+            UNPAIRED_PLAYER = 10;
+            INVALID_PAIRING = 11;
+            MORE_RESULTS_THAN_ROUNDS = 12;
+            MORE_RESULTS_THAN_PAIRINGS = 13;
+            INVALID_ROUND_RESULTS_COUNT = 14;
+            INVALID_PLAYER_CLASS_COUNT = 15;
+            INVALID_PLAYER_CLASS = 16;
+            INVALID_CLASS_PRIZE = 17;
+            INVALID_GIBSON_SPREAD = 18;
+            INVALID_CONTROL_LOSS_THRESHOLD = 19;
+            INVALID_HOPEFULNESS_THRESHOLD = 20;
+            INVALID_DIVISION_SIMS = 21;
+            INVALID_CONTROL_LOSS_SIMS = 22;
+            INVALID_PLACE_PRIZES = 23;
+            INVALID_REMOVED_PLAYER = 24;
+            INVALID_VALID_PLAYER_COUNT = 25;
+            MIN_WEIGHT_MATCHING = 26;
+            INVALID_PAIRINGS_LENGTH = 27;
+            OVERCONSTRAINED = 28;
+            REQUEST_TO_JSON_FAILED = 29;
+            TIMEOUT = 30;
+            }
 
-message PairResponse {
-optional PairError error_code = 1;
-optional string error_message = 2;
-optional string log = 3;
-repeated int32 pairings = 4;
-}
+            message PairResponse {
+            optional PairError error_code = 1;
+            optional string error_message = 2;
+            optional string log = 3;
+            repeated int32 pairings = 4;
+            }
 EOT
 
-        # Parse the protobuf definitions
-        Google::ProtocolBuffers->parse($proto_definitions, { create_accessors => 1 });
-        my @players            = $dp->Players();
-        my $number_of_players  = scalar @players;
+            # Parse the protobuf definitions
+            Google::ProtocolBuffers->parse($proto_definitions, { create_accessors => 1 });
+            $cop_api_protos_initialized = 1;
+        }
 
-        my $class_count = 0;
+        my $underclass_count = 0;
         my %tsh_class_to_api_class = ();
         my @class_prizes = ();
         foreach my $class ( keys %{ $lowest_ranked_class_payouts } ) {
             if (!$lowest_ranked_class_payouts->{$class} || $lowest_ranked_class_payouts->{$class} < 1) {
                 next;
             }
-            push( @class_prizes, $lowest_ranked_class_payouts->{$class} );
-            $tsh_class_to_api_class{ $class } = $class_count;
-            $class_count++;
+            # Convert the lowest ranked class prizer into number of class prizes
+            push( @class_prizes, $lowest_ranked_class_payouts->{$class} + 1);
+            $underclass_count++;
+            $tsh_class_to_api_class{ $class } = $underclass_count;
         }
+        
+        my @players            = $dp->Players();
+        my $number_of_players  = scalar @players;
 
         my @player_names = ();
         my @player_classes = ();
@@ -298,7 +305,10 @@ EOT
             push( @player_names, $players[$i]->PrettyName() );
             my $player_api_class = 0;
             if ($players[$i]->Class()) {
-                $player_api_class = $tsh_class_to_api_class{ $players[$i]->Class() };
+                my $api_class = $tsh_class_to_api_class{ $players[$i]->Class() };
+                if ($api_class) {
+                    $player_api_class = $api_class;
+                }
             }
             push( @player_classes, $player_api_class );
             if ( !$players[$i]->Active() ) {
@@ -314,12 +324,19 @@ EOT
             for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
                 my $player = $players[$i];
                 my $oppID = $player->OpponentID($round);
-                # FIXME: convert byes and unpaired correctly
                 my $api_opp_id;
                 if (!defined $oppID) {
                     $api_opp_id = -1;
+                } elsif ($oppID == 0) {
+                    $api_opp_id = $i;
                 } else {
                     $api_opp_id = $tsh_id_to_api_id{ $oppID };
+                }
+                if (!(defined $api_opp_id) || ($api_opp_id < 0) || ($api_opp_id >= $number_of_players)) {
+                    $tournament->TellUser(
+                        'eapfail',
+                        sprintf("player %s has invalid opponent for round %d", $player->PrettyName(), $round)
+                    );
                 }
                 push ( @round_pairings, $api_opp_id );
             }
@@ -350,6 +367,11 @@ EOT
             $api_hopefulness = $hopefulness->[$rounds_remaining];
         }
 
+        my $api_gibson_spread = $gibson_spread->[-1];
+        if ($rounds_remaining < scalar(@$gibson_spread)) {
+            $api_gibson_spread = $gibson_spread->[$rounds_remaining];
+        }
+
         my $request_hash = {
             pair_method           => Ipc::PairMethod::COP(),
             player_names          => \@player_names,
@@ -357,7 +379,7 @@ EOT
             division_pairings     => \@division_pairings,
             division_results      => \@division_results,
             class_prizes          => \@class_prizes,
-            gibson_spread         => $gibson_spread,
+            gibson_spread         => $api_gibson_spread,
             control_loss_threshold => $api_control_loss_threshold,
             hopefulness_threshold => $api_hopefulness,
             all_players           => $number_of_players,

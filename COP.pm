@@ -15,8 +15,7 @@ use Data::Dumper;
 
 use File::Basename;
 use Graph::Matching qw(max_weight_matching);
-use Google::ProtocolBuffers;
-use HTTP::Tiny;
+use JSON;
 use TSH::Command::ShowPairings;
 use TSH::PairingCommand;
 use File::Copy;
@@ -90,8 +89,6 @@ Should run the command in the context of the given
 tournament with the specified parsed arguments.
 
 =cut
-
-my $cop_api_protos_initialized = 0;
 
 sub Run ($$@) {
     my $this       = shift;
@@ -194,92 +191,6 @@ sub Run ($$@) {
     my $disallow_repeat_byes = !!$tournament->Config()->Value('disallow_repeat_byes');
 
     if ($tournament->Config()->Value('use_cop_api')) {
-        if (!$cop_api_protos_initialized) {
-            my $proto_definitions = <<'EOT';
-            syntax = "proto2";
-            package ipc;
-
-            enum PairMethod {
-            COP = 0;
-            }
-
-            message RoundPairings {
-            repeated int32 pairings = 1;
-            }
-
-            message RoundResults {
-            repeated int32 results = 1;
-            }
-
-            message PairRequest {
-            optional PairMethod pair_method = 1;
-            repeated string player_names = 2;
-            repeated int32 player_classes = 3;
-            repeated RoundPairings division_pairings = 4;
-            repeated RoundResults division_results = 5;
-            repeated int32 class_prizes = 6;
-            optional int32 gibson_spread = 7;
-            optional double control_loss_threshold = 8;
-            optional double hopefulness_threshold = 9;
-            optional int32 all_players = 10;
-            optional int32 valid_players = 11;
-            optional int32 rounds = 12;
-            optional int32 place_prizes = 13;
-            optional int32 division_sims = 14;
-            optional int32 control_loss_sims = 15;
-            optional bool use_control_loss = 16;
-            optional bool allow_repeat_byes = 17;
-            repeated int32 removed_players = 18;
-            optional int64 seed = 19;
-            }
-
-            enum PairError {
-            SUCCESS = 0;
-            PLAYER_COUNT_INSUFFICIENT = 1;
-            ROUND_COUNT_INSUFFICIENT = 2;
-            PLAYER_COUNT_TOO_LARGE = 3;
-            PLAYER_NAME_COUNT_INSUFFICIENT = 4;
-            PLAYER_NAME_EMPTY = 5;
-            MORE_PAIRINGS_THAN_ROUNDS = 6;
-            ALL_ROUNDS_PAIRED = 7;
-            INVALID_ROUND_PAIRINGS_COUNT = 8;
-            PLAYER_INDEX_OUT_OF_BOUNDS = 9;
-            UNPAIRED_PLAYER = 10;
-            INVALID_PAIRING = 11;
-            MORE_RESULTS_THAN_ROUNDS = 12;
-            MORE_RESULTS_THAN_PAIRINGS = 13;
-            INVALID_ROUND_RESULTS_COUNT = 14;
-            INVALID_PLAYER_CLASS_COUNT = 15;
-            INVALID_PLAYER_CLASS = 16;
-            INVALID_CLASS_PRIZE = 17;
-            INVALID_GIBSON_SPREAD = 18;
-            INVALID_CONTROL_LOSS_THRESHOLD = 19;
-            INVALID_HOPEFULNESS_THRESHOLD = 20;
-            INVALID_DIVISION_SIMS = 21;
-            INVALID_CONTROL_LOSS_SIMS = 22;
-            INVALID_PLACE_PRIZES = 23;
-            INVALID_REMOVED_PLAYER = 24;
-            INVALID_VALID_PLAYER_COUNT = 25;
-            MIN_WEIGHT_MATCHING = 26;
-            INVALID_PAIRINGS_LENGTH = 27;
-            OVERCONSTRAINED = 28;
-            REQUEST_TO_JSON_FAILED = 29;
-            TIMEOUT = 30;
-            }
-
-            message PairResponse {
-            optional PairError error_code = 1;
-            optional string error_message = 2;
-            optional string log = 3;
-            repeated int32 pairings = 4;
-            }
-EOT
-
-            # Parse the protobuf definitions
-            Google::ProtocolBuffers->parse($proto_definitions, { create_accessors => 1 });
-            $cop_api_protos_initialized = 1;
-        }
-
         my $underclass_count = 0;
         my %tsh_class_to_api_class = ();
         my @class_prizes = ();
@@ -373,7 +284,8 @@ EOT
         }
 
         my $request_hash = {
-            pair_method           => Ipc::PairMethod::COP(),
+            # The COP pairing method has an enum value of 0
+            pair_method           => 0,
             player_names          => \@player_names,
             player_classes        => \@player_classes,
             division_pairings     => \@division_pairings,
@@ -394,38 +306,64 @@ EOT
             seed                  => 0,
         };
 
-        # Build the PairRequest message
-        my $request_binary = Ipc::PairRequest->encode($request_hash);
+        my $json_request = encode_json($request_hash);
+        my $api_url = 'https://woogles.io/api/pair_service.PairService/HandlePairRequest';
+        my $curl_command = "curl -s -H 'Content-Type: application/json' -d '" . $json_request . "' $api_url";
+        my $response = `$curl_command`;
 
-        print(Dumper($request_hash));
-        print("Finished building COP request\n");
-
-        my $http = HTTP::Tiny->new();
-        my $url = 'https://woogles.io/pair';
-        my $response = $http->post($url, {
-            headers => {
-                'Content-Type' => 'application/x-protobuf',
-            },
-            content => $request_binary,
-        });
-
-        if ($response->{success}) {
-            my $response_binary = $response->{content};
-            
-            my $pair_response = Ipc::PairResponse->decode($response_binary);
-
-            if ($pair_response->{error_code} == Ipc::PairError::SUCCESS()) {
-                print "Pairing successful!\n";
-                print "Pairings: " . join(", ", @{ $pair_response->{pairings} }) . "\n";
-            } else {
-                warn "Error: $pair_response->{error_message}\n";
-                warn "Error Code: $pair_response->{error_code}\n";
-                warn "Log: $pair_response->{log}\n";
-            }
-        } else {
-            print "HTTP request failed: $response->{status} $response->{reason}\n";
+        if ($? != 0) {
+            $tournament->TellUser('eapfail', print("curl command for COP API failed with: $?"));
+            return;
         }
-        return 1;
+
+        # Decode the JSON response
+        my $response_data = eval { decode_json($response) };
+        if ($@) {
+            $tournament->TellUser('eapfail', print("failed to decode JSON for COP API: $@"));
+            return;
+        }
+
+        my $cop_config_logs_only = {
+            log_filename               => $log_filename,
+            html_log_filename          => $html_log_filename,
+        };
+
+        log_info($cop_config_logs_only, $response_data->{log});
+        copy_log_to_html_directory($cop_config_logs_only);
+
+        if ($response_data->{error_code} != 0) {
+            $tournament->TellUser('eapfail', print("COP API error code: " . $response_data->{error_code} . ": " . $response_data->{error_message}));
+            return;
+        }
+
+        my $setupp = $this->SetupForPairings(
+            'division' => $dp,
+            'source0'  => $sr0
+        ) or return 0;
+
+        my $target0 = $setupp->{'target0'};
+
+        my $api_pairings = $response_data->{pairings};
+        for ( my $i = 0 ; $i < scalar @{$api_pairings} ; $i++ ) {
+            my $player_api_id = $i;
+            my $player_id = $players[$i]->ID();
+            my $opponent_api_id = $api_pairings->[$i];
+            my $opponent_id = 0;
+            if ($opponent_api_id == -1) {
+                next;
+            } elsif ($opponent_api_id != $player_api_id) {
+                $opponent_id = $players[$opponent_api_id]->ID();
+            }
+            $dp->Pair( $player_id, $opponent_id, $target0, 1 );
+        }
+
+        $this->TidyAfterPairing($dp);
+
+        # Automatically show the pairings
+        my $show_pairings_command =
+            new TSH::Command::ShowPairings( 'noconsole' => 1 );
+        $show_pairings_command->Run( $tournament, $round_to_pair1, $dp );
+        return;
     }
 
     my $number_of_threads = $tournament->Config()->Value('cop_threads');

@@ -284,8 +284,7 @@ sub Run ($$@) {
         }
 
         my $request_hash = {
-            # The COP pairing method has an enum value of 0
-            pair_method           => 0,
+            pair_method           => 'COP',
             player_names          => \@player_names,
             player_classes        => \@player_classes,
             division_pairings     => \@division_pairings,

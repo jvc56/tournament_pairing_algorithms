@@ -299,13 +299,16 @@ sub Run ($$@) {
             place_prizes          => $lowest_ranked_payout + 1,
             division_sims         => $number_of_sims,
             control_loss_sims     => $always_wins_number_of_sims,
-            use_control_loss      => $round_to_pair0 >= $control_loss_activation_round - 1,
-            allow_repeat_byes     => !$disallow_repeat_byes,
+            use_control_loss      => $round_to_pair0 >= $control_loss_activation_round - 1 ? JSON::true : JSON::false,
+            allow_repeat_byes     => $disallow_repeat_byes ? JSON::false : JSON::true,
             removed_players       => \@removed_players,
             seed                  => 0,
         };
 
         my $json_request = encode_json($request_hash);
+
+        print ("request:\n$json_request\n");
+
         my $api_url = 'https://woogles.io/api/pair_service.PairService/HandlePairRequest';
         my $curl_command = "curl -s -H 'Content-Type: application/json' -d '" . $json_request . "' $api_url";
         my $response = `$curl_command`;
@@ -321,6 +324,8 @@ sub Run ($$@) {
             $tournament->TellUser('eapfail', print("failed to decode JSON for COP API: $@"));
             return;
         }
+
+        printf("COP API response:\n%s\n", $response);
 
         my $cop_config_logs_only = {
             log_filename               => $log_filename,
@@ -362,7 +367,7 @@ sub Run ($$@) {
         my $show_pairings_command =
             new TSH::Command::ShowPairings( 'noconsole' => 1 );
         $show_pairings_command->Run( $tournament, $round_to_pair1, $dp );
-        return;
+        return 1;
     }
 
     my $number_of_threads = $tournament->Config()->Value('cop_threads');

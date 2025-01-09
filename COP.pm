@@ -213,7 +213,7 @@ sub Run ($$@) {
         my %tsh_id_to_api_id = ();
         for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
             $tsh_id_to_api_id{ $players[$i]->ID() } = $i;
-            push( @player_names, $players[$i]->PrettyName() );
+            push( @player_names, $players[$i]->PrettyName() =~ s/[^a-zA-Z0-9\s]//gr );
             my $player_api_class = 0;
             if ($players[$i]->Class()) {
                 my $api_class = $tsh_class_to_api_class{ $players[$i]->Class() };
@@ -243,11 +243,12 @@ sub Run ($$@) {
                 } else {
                     $api_opp_id = $tsh_id_to_api_id{ $oppID };
                 }
-                if (!(defined $api_opp_id) || ($api_opp_id < 0) || ($api_opp_id >= $number_of_players)) {
+                if (($api_opp_id < -1) || ($api_opp_id >= $number_of_players)) {
                     $tournament->TellUser(
                         'eapfail',
                         sprintf("player %s has invalid opponent for round %d", $player->PrettyName(), $round)
                     );
+                    return 0;
                 }
                 push ( @round_pairings, $api_opp_id );
             }
@@ -270,17 +271,17 @@ sub Run ($$@) {
 
         my $api_control_loss_threshold = $control_loss_thresholds->[-1];
         if ($rounds_remaining < scalar(@$control_loss_thresholds)) {
-            $api_control_loss_threshold = $control_loss_thresholds->[$rounds_remaining];
+            $api_control_loss_threshold = $control_loss_thresholds->[$rounds_remaining - 1];
         }
 
         my $api_hopefulness = $hopefulness->[-1];
         if ($rounds_remaining < scalar(@$hopefulness)) {
-            $api_hopefulness = $hopefulness->[$rounds_remaining];
+            $api_hopefulness = $hopefulness->[$rounds_remaining - 1];
         }
 
         my $api_gibson_spread = $gibson_spread->[-1];
         if ($rounds_remaining < scalar(@$gibson_spread)) {
-            $api_gibson_spread = $gibson_spread->[$rounds_remaining];
+            $api_gibson_spread = $gibson_spread->[$rounds_remaining - 1];
         }
 
         my $request_hash = {
@@ -307,25 +308,25 @@ sub Run ($$@) {
 
         my $json_request = encode_json($request_hash);
 
-        print ("request:\n$json_request\n");
+        print ("Request:\n$json_request\n");
 
         my $api_url = 'https://woogles.io/api/pair_service.PairService/HandlePairRequest';
         my $curl_command = "curl -s -H 'Content-Type: application/json' -d '" . $json_request . "' $api_url";
         my $response = `$curl_command`;
 
+        print ("Response: $response\n");
+
         if ($? != 0) {
-            $tournament->TellUser('eapfail', print("curl command for COP API failed with: $?"));
-            return;
+            $tournament->TellUser('eapfail', sprintf("curl command for COP API failed with: $?"));
+            return 0;
         }
 
         # Decode the JSON response
         my $response_data = eval { decode_json($response) };
         if ($@) {
-            $tournament->TellUser('eapfail', print("failed to decode JSON for COP API: $@"));
-            return;
+            $tournament->TellUser('eapfail', sprintf("failed to decode JSON for COP API: $@"));
+            return 0;
         }
-
-        printf("COP API response:\n%s\n", $response);
 
         my $cop_config_logs_only = {
             log_filename               => $log_filename,
@@ -335,9 +336,9 @@ sub Run ($$@) {
         log_info($cop_config_logs_only, $response_data->{log});
         copy_log_to_html_directory($cop_config_logs_only);
 
-        if ($response_data->{error_code} != 0) {
-            $tournament->TellUser('eapfail', print("COP API error code: " . $response_data->{error_code} . ": " . $response_data->{error_message}));
-            return;
+        if ($response_data->{error_code} ne 'SUCCESS') {
+            $tournament->TellUser('eapfail', sprintf("COP API error code: " . $response_data->{error_code} . ": " . $response_data->{error_message}));
+            return 0;
         }
 
         my $setupp = $this->SetupForPairings(
@@ -348,6 +349,7 @@ sub Run ($$@) {
         my $target0 = $setupp->{'target0'};
 
         my $api_pairings = $response_data->{pairings};
+        print("Pairings: @$api_pairings\n");
         for ( my $i = 0 ; $i < scalar @{$api_pairings} ; $i++ ) {
             my $player_api_id = $i;
             my $player_id = $players[$i]->ID();
@@ -358,6 +360,7 @@ sub Run ($$@) {
             } elsif ($opponent_api_id != $player_api_id) {
                 $opponent_id = $players[$opponent_api_id]->ID();
             }
+            print("Pairing $player_id with $opponent_id\n");
             $dp->Pair( $player_id, $opponent_id, $target0, 1 );
         }
 

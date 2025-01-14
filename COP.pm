@@ -308,13 +308,9 @@ sub Run ($$@) {
 
         my $json_request = encode_json($request_hash);
 
-        print ("Request:\n$json_request\n");
-
         my $api_url = 'https://woogles.io/api/pair_service.PairService/HandlePairRequest';
         my $curl_command = "curl -s -H 'Content-Type: application/json' -d '" . $json_request . "' $api_url";
         my $response = `$curl_command`;
-
-        print ("Response: $response\n");
 
         if ($? != 0) {
             $tournament->TellUser('eapfail', sprintf("curl command for COP API failed with: $?"));
@@ -341,6 +337,11 @@ sub Run ($$@) {
             return 0;
         }
 
+        if ($response_data->{log} eq '') {
+            $tournament->TellUser('eapfail', sprintf("COP API responded with empty log"));
+            return 0;
+        }
+
         my $setupp = $this->SetupForPairings(
             'division' => $dp,
             'source0'  => $sr0
@@ -349,18 +350,16 @@ sub Run ($$@) {
         my $target0 = $setupp->{'target0'};
 
         my $api_pairings = $response_data->{pairings};
-        print("Pairings: @$api_pairings\n");
         for ( my $i = 0 ; $i < scalar @{$api_pairings} ; $i++ ) {
             my $player_api_id = $i;
             my $player_id = $players[$i]->ID();
             my $opponent_api_id = $api_pairings->[$i];
             my $opponent_id = 0;
-            if ($opponent_api_id == -1) {
+            if ($opponent_api_id < 0) {
                 next;
             } elsif ($opponent_api_id != $player_api_id) {
                 $opponent_id = $players[$opponent_api_id]->ID();
             }
-            print("Pairing $player_id with $opponent_id\n");
             $dp->Pair( $player_id, $opponent_id, $target0, 1 );
         }
 

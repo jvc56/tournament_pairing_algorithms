@@ -15,6 +15,7 @@ use Data::Dumper;
 
 use File::Basename;
 use Graph::Matching qw(max_weight_matching);
+use JSON;
 use TSH::Command::ShowPairings;
 use TSH::PairingCommand;
 use File::Copy;
@@ -187,12 +188,194 @@ sub Run ($$@) {
         return 0;
     }
 
+    my $disallow_repeat_byes = !!$tournament->Config()->Value('disallow_repeat_byes');
+
+    if ($tournament->Config()->Value('use_cop_api')) {
+        my $underclass_count = 0;
+        my %tsh_class_to_api_class = ();
+        my @class_prizes = ();
+        foreach my $class ( keys %{ $lowest_ranked_class_payouts } ) {
+            if (!$lowest_ranked_class_payouts->{$class} || $lowest_ranked_class_payouts->{$class} < 1) {
+                next;
+            }
+            # Convert the lowest ranked class prizer into number of class prizes
+            push( @class_prizes, $lowest_ranked_class_payouts->{$class} + 1);
+            $underclass_count++;
+            $tsh_class_to_api_class{ $class } = $underclass_count;
+        }
+        
+        my @players            = $dp->Players();
+        my $number_of_players  = scalar @players;
+
+        my @player_names = ();
+        my @player_classes = ();
+        my @removed_players = ();
+        my %tsh_id_to_api_id = ();
+        for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
+            $tsh_id_to_api_id{ $players[$i]->ID() } = $i;
+            push( @player_names, $players[$i]->PrettyName() =~ s/[^a-zA-Z0-9\s]//gr );
+            my $player_api_class = 0;
+            if ($players[$i]->Class()) {
+                my $api_class = $tsh_class_to_api_class{ $players[$i]->Class() };
+                if ($api_class) {
+                    $player_api_class = $api_class;
+                }
+            }
+            push( @player_classes, $player_api_class );
+            if ( !$players[$i]->Active() ) {
+                push( @removed_players, $i );
+            }
+        }
+
+        my @division_pairings = ();
+        my $last_paired_round0 = $dp->LastPairedRound0();
+
+        for ( my $round = 0 ; $round <= $last_paired_round0 ; $round++ ) {
+            my @round_pairings = ();
+            for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
+                my $player = $players[$i];
+                my $oppID = $player->OpponentID($round);
+                my $api_opp_id;
+                if (!defined $oppID) {
+                    $api_opp_id = -1;
+                } elsif ($oppID == 0) {
+                    $api_opp_id = $i;
+                } else {
+                    $api_opp_id = $tsh_id_to_api_id{ $oppID };
+                }
+                if (($api_opp_id < -1) || ($api_opp_id >= $number_of_players)) {
+                    $tournament->TellUser(
+                        'eapfail',
+                        sprintf("player %s has invalid opponent for round %d", $player->PrettyName(), $round)
+                    );
+                    return 0;
+                }
+                push ( @round_pairings, $api_opp_id );
+            }
+            push( @division_pairings, { pairings => \@round_pairings } );
+        }
+
+        my @division_results = ();
+        my $last_paired_score_round0 = $dp->LastPairedScoreRound0();
+        
+        for ( my $round = 0 ; $round <= $last_paired_score_round0 ; $round++ ) {
+            my @round_results = ();
+            for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
+                my $player = $players[$i];
+                push ( @round_results, $player->Score($round) );
+            }
+            push( @division_results, { results => \@round_results } );
+        }
+        
+        my $rounds_remaining  = ($number_of_rounds - $last_paired_round0) - 1;
+
+        my $api_control_loss_threshold = $control_loss_thresholds->[-1];
+        if ($rounds_remaining < scalar(@$control_loss_thresholds)) {
+            $api_control_loss_threshold = $control_loss_thresholds->[$rounds_remaining - 1];
+        }
+
+        my $api_hopefulness = $hopefulness->[-1];
+        if ($rounds_remaining < scalar(@$hopefulness)) {
+            $api_hopefulness = $hopefulness->[$rounds_remaining - 1];
+        }
+
+        my $api_gibson_spread = $gibson_spread->[-1];
+        if ($rounds_remaining < scalar(@$gibson_spread)) {
+            $api_gibson_spread = $gibson_spread->[$rounds_remaining - 1];
+        }
+
+        my $request_hash = {
+            pair_method           => 'COP',
+            player_names          => \@player_names,
+            player_classes        => \@player_classes,
+            division_pairings     => \@division_pairings,
+            division_results      => \@division_results,
+            class_prizes          => \@class_prizes,
+            gibson_spread         => $api_gibson_spread,
+            control_loss_threshold => $api_control_loss_threshold,
+            hopefulness_threshold => $api_hopefulness,
+            all_players           => $number_of_players,
+            valid_players         => $number_of_players - scalar @removed_players,
+            rounds                => $number_of_rounds,
+            place_prizes          => $lowest_ranked_payout + 1,
+            division_sims         => $number_of_sims,
+            control_loss_sims     => $always_wins_number_of_sims,
+            use_control_loss      => $round_to_pair0 >= $control_loss_activation_round - 1 ? JSON::true : JSON::false,
+            allow_repeat_byes     => $disallow_repeat_byes ? JSON::false : JSON::true,
+            removed_players       => \@removed_players,
+            seed                  => 0,
+        };
+
+        my $json_request = encode_json($request_hash);
+
+        my $api_url = 'https://woogles.io/api/pair_service.PairService/HandlePairRequest';
+        my $curl_command = "curl -s -H 'Content-Type: application/json' -d '" . $json_request . "' $api_url";
+        my $response = `$curl_command`;
+
+        if ($? != 0) {
+            $tournament->TellUser('eapfail', sprintf("curl command for COP API failed with: $?"));
+            return 0;
+        }
+
+        # Decode the JSON response
+        my $response_data = eval { decode_json($response) };
+        if ($@) {
+            $tournament->TellUser('eapfail', sprintf("failed to decode JSON for COP API: $@"));
+            return 0;
+        }
+
+        my $cop_config_logs_only = {
+            log_filename               => $log_filename,
+            html_log_filename          => $html_log_filename,
+        };
+
+        log_info($cop_config_logs_only, $response_data->{log});
+        copy_log_to_html_directory($cop_config_logs_only);
+
+        if ($response_data->{error_code} ne 'SUCCESS') {
+            $tournament->TellUser('eapfail', sprintf("COP API error code: " . $response_data->{error_code} . ": " . $response_data->{error_message}));
+            return 0;
+        }
+
+        if ($response_data->{log} eq '') {
+            $tournament->TellUser('eapfail', sprintf("COP API responded with empty log"));
+            return 0;
+        }
+
+        my $setupp = $this->SetupForPairings(
+            'division' => $dp,
+            'source0'  => $sr0
+        ) or return 0;
+
+        my $target0 = $setupp->{'target0'};
+
+        my $api_pairings = $response_data->{pairings};
+        for ( my $i = 0 ; $i < scalar @{$api_pairings} ; $i++ ) {
+            my $player_api_id = $i;
+            my $player_id = $players[$i]->ID();
+            my $opponent_api_id = $api_pairings->[$i];
+            my $opponent_id = 0;
+            if ($opponent_api_id < 0) {
+                next;
+            } elsif ($opponent_api_id != $player_api_id) {
+                $opponent_id = $players[$opponent_api_id]->ID();
+            }
+            $dp->Pair( $player_id, $opponent_id, $target0, 1 );
+        }
+
+        $this->TidyAfterPairing($dp);
+
+        # Automatically show the pairings
+        my $show_pairings_command =
+            new TSH::Command::ShowPairings( 'noconsole' => 1 );
+        $show_pairings_command->Run( $tournament, $round_to_pair1, $dp );
+        return 1;
+    }
+
     my $number_of_threads = $tournament->Config()->Value('cop_threads');
     if ( ( !( defined $number_of_threads ) ) || $number_of_threads < 1 ) {
         $number_of_threads = 1;
     }
-
-    my $disallow_repeat_byes = !!$tournament->Config()->Value('disallow_repeat_byes');
 
     my %times_played          = ();
     my %previous_pairing_hash = ();

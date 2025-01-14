@@ -47,7 +47,7 @@ The COP pairing software requires two Perl modules. You can install them with th
 The Graph::Matching module is used by the native COP algorithm that is implemented in the Perl code of the COP module itself. The JSON module is used to encode the API request sent over the internet where a server will run the COP algorithm instead of using your local machine. If you always run COP using the API request, the Graph::Matching module isn't strictly necessary but is good to have as a backup in case of network failures.
 
 ## Download the COP.pm file
-Download the COP.pm file from this repository and save it in the following directory in your local TSH instance:
+Download the COP.pm file (not the legacy/COP.pm version) from this repository and save it in the following directory in your local TSH instance:
 
 ```TSH/lib/perl/TSH/Command```
 

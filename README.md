@@ -1,6 +1,11 @@
 # Upgrading to the COP API
 If you already use COP on TSH, you can follow this section to upgrade to the new COP.pm version. If you do not already have COP on TSH, go to the 'Installing COP on TSH' section.
 
+## Download the updated COP.pm file
+Download the COP.pm file (not the legacy/COP.pm version) from this repository and save it in the following directory in your local TSH instance:
+
+```TSH/lib/perl/TSH/Command```
+
 ## Install the JSON module
 The updated COP module requires a new Perl module which can be installed with:
 
@@ -18,6 +23,15 @@ The updated COP module also introduces a new requirement that all hopefulness va
 would become
 
 ```config hopefulness = [0.1, 0.1, 0.05, 0.02, 0.01]```
+
+Since the COP API typically runs much faster than native, it is recommended to increase the values for `simulations` and `always_wins_simulations` for more accurate results. The following values are a reasonable starting point for most events:
+
+```
+config simulations = 100000
+config always_wins_simulations = 10000
+```
+
+These may need to be adjusted based on the size and duration of the event.
 
 ## Run COP
 After restarting TSH, you should now be able to run the new COP module.
@@ -42,7 +56,7 @@ COP requires several custom TSH config variables to run. The required variables 
 
 ```
 config use_cop_api = 1
-config simulations = 10000
+config simulations = 100000
 config always_wins_simulations = 10000
 config gibson_spread = [250, 200]
 config control_loss_thresholds = [0.25]

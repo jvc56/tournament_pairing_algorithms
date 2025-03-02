@@ -195,7 +195,7 @@ sub Run ($$@) {
         my %tsh_class_to_api_class = ();
         my @class_prizes = ();
         foreach my $class ( keys %{ $lowest_ranked_class_payouts } ) {
-            if (!$lowest_ranked_class_payouts->{$class} || $lowest_ranked_class_payouts->{$class} < 1) {
+            if (!(defined $lowest_ranked_class_payouts->{$class})) {
                 next;
             }
             # Convert the lowest ranked class prizer into number of class prizes

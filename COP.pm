@@ -1,11 +1,5 @@
 #!/usr/bin/perl
 
-# Testing:
-# gibsonized players get the bye
-# odd contender groups
-# class prize contenders in last round
-# pair around an existing pairing
-
 package TSH::Command::COP;
 
 use strict;
@@ -262,7 +256,12 @@ sub Run ($$@) {
             my @round_results = ();
             for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
                 my $player = $players[$i];
-                push ( @round_results, $player->Score($round) );
+                # Use a score of 0 for players with pending results
+                my $player_score = $player->Score($round);
+                if (!$player_score) {
+                    $player_score = 0;
+                }
+                push ( @round_results, $player_score );
             }
             push( @division_results, { results => \@round_results } );
         }
@@ -324,6 +323,11 @@ sub Run ($$@) {
             return 0;
         }
 
+        if ($response_data->{log} eq '') {
+            $tournament->TellUser('eapfail', sprintf("COP API failed:\n" . $response));
+            return 0;
+        }
+
         my $cop_config_logs_only = {
             log_filename               => $log_filename,
             html_log_filename          => $html_log_filename,
@@ -334,11 +338,6 @@ sub Run ($$@) {
 
         if ($response_data->{error_code} ne 'SUCCESS') {
             $tournament->TellUser('eapfail', sprintf("COP API error code: " . $response_data->{error_code} . ": " . $response_data->{error_message}));
-            return 0;
-        }
-
-        if ($response_data->{log} eq '') {
-            $tournament->TellUser('eapfail', sprintf("COP API responded with empty log"));
             return 0;
         }
 

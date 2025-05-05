@@ -1,11 +1,5 @@
 #!/usr/bin/perl
 
-# Testing:
-# gibsonized players get the bye
-# odd contender groups
-# class prize contenders in last round
-# pair around an existing pairing
-
 package TSH::Command::COP;
 
 use strict;
@@ -187,8 +181,12 @@ sub Run ($$@) {
             'control_loss_activation_round' );
         return 0;
     }
+    # Convert from 1-index to 0-index
+    $control_loss_activation_round--;
 
     my $disallow_repeat_byes = !!$tournament->Config()->Value('disallow_repeat_byes');
+
+    my $top_down_byes = !!$tournament->Config()->Value('top_down_byes');
 
     if ($tournament->Config()->Value('use_cop_api')) {
         my $underclass_count = 0;
@@ -262,7 +260,12 @@ sub Run ($$@) {
             my @round_results = ();
             for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
                 my $player = $players[$i];
-                push ( @round_results, $player->Score($round) );
+                # Use a score of 0 for players with pending results
+                my $player_score = $player->Score($round);
+                if (!$player_score) {
+                    $player_score = 0;
+                }
+                push ( @round_results, $player_score );
             }
             push( @division_results, { results => \@round_results } );
         }
@@ -285,25 +288,26 @@ sub Run ($$@) {
         }
 
         my $request_hash = {
-            pair_method           => 'COP',
-            player_names          => \@player_names,
-            player_classes        => \@player_classes,
-            division_pairings     => \@division_pairings,
-            division_results      => \@division_results,
-            class_prizes          => \@class_prizes,
-            gibson_spread         => $api_gibson_spread,
-            control_loss_threshold => $api_control_loss_threshold,
-            hopefulness_threshold => $api_hopefulness,
-            all_players           => $number_of_players,
-            valid_players         => $number_of_players - scalar @removed_players,
-            rounds                => $number_of_rounds,
-            place_prizes          => $lowest_ranked_payout + 1,
-            division_sims         => $number_of_sims,
-            control_loss_sims     => $always_wins_number_of_sims,
-            use_control_loss      => $round_to_pair0 >= $control_loss_activation_round - 1 ? JSON::true : JSON::false,
-            allow_repeat_byes     => $disallow_repeat_byes ? JSON::false : JSON::true,
-            removed_players       => \@removed_players,
-            seed                  => 0,
+            pair_method                   => 'COP',
+            player_names                  => \@player_names,
+            player_classes                => \@player_classes,
+            division_pairings             => \@division_pairings,
+            division_results              => \@division_results,
+            class_prizes                  => \@class_prizes,
+            gibson_spread                 => $api_gibson_spread,
+            control_loss_threshold        => $api_control_loss_threshold,
+            hopefulness_threshold         => $api_hopefulness,
+            all_players                   => $number_of_players,
+            valid_players                 => $number_of_players - scalar @removed_players,
+            rounds                        => $number_of_rounds,
+            place_prizes                  => $lowest_ranked_payout + 1,
+            division_sims                 => $number_of_sims,
+            control_loss_sims             => $always_wins_number_of_sims,
+            control_loss_activation_round => $control_loss_activation_round,
+            allow_repeat_byes             => $disallow_repeat_byes ? JSON::false : JSON::true,
+            removed_players               => \@removed_players,
+            seed                          => 0,
+            top_down_byes                 => $top_down_byes ? JSON::true : JSON::false,
         };
 
         my $json_request = encode_json($request_hash);
@@ -324,6 +328,11 @@ sub Run ($$@) {
             return 0;
         }
 
+        if ($response_data->{log} eq '') {
+            $tournament->TellUser('eapfail', sprintf("COP API failed:\n" . $response));
+            return 0;
+        }
+
         my $cop_config_logs_only = {
             log_filename               => $log_filename,
             html_log_filename          => $html_log_filename,
@@ -334,11 +343,6 @@ sub Run ($$@) {
 
         if ($response_data->{error_code} ne 'SUCCESS') {
             $tournament->TellUser('eapfail', sprintf("COP API error code: " . $response_data->{error_code} . ": " . $response_data->{error_message}));
-            return 0;
-        }
-
-        if ($response_data->{log} eq '') {
-            $tournament->TellUser('eapfail', sprintf("COP API responded with empty log"));
             return 0;
         }
 
@@ -478,7 +482,7 @@ sub Run ($$@) {
         control_loss_thresholds    => extend_tsh_config_array(
             $control_loss_thresholds, $number_of_rounds
         ),
-        control_loss_activation_round => $control_loss_activation_round - 1,
+        control_loss_activation_round => $control_loss_activation_round,
         number_of_rounds_remaining    => ( $number_of_rounds - 1 ) - $sr0,
         lowest_ranked_payout          => $lowest_ranked_payout,
         lowest_ranked_class_payouts   => $lowest_ranked_class_payouts,
@@ -835,7 +839,7 @@ sub config_to_string {
     }
     $ret .= sprintf( "%31s %s\n",
         "Control Loss Activation Round:",
-        $config->{control_loss_activation_round} + 1 );
+        $config->{control_loss_activation_round} );
     $ret .= sprintf( "%31s %s\n", "Threads:", $config->{number_of_threads} );
 
     my $active_bye_text = 'INACTIVE';

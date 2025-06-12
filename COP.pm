@@ -316,7 +316,14 @@ sub Run ($$@) {
         my $curl_command = "curl -s -H 'Content-Type: application/json' -d '" . $json_request . "' $api_url";
         my $response = `$curl_command`;
 
+        my $cop_config_logs_only = {
+            log_filename               => $log_filename,
+            html_log_filename          => $html_log_filename,
+        };
+
         if ($? != 0) {
+            log_info($cop_config_logs_only, "Failed curl command:\n$curl_command");
+            copy_log_to_html_directory($cop_config_logs_only);
             $tournament->TellUser('eapfail', sprintf("curl command for COP API failed with: $?"));
             return 0;
         }
@@ -324,24 +331,25 @@ sub Run ($$@) {
         # Decode the JSON response
         my $response_data = eval { decode_json($response) };
         if ($@) {
+            log_info($cop_config_logs_only, "Failed to decode response:\n$response");
+            copy_log_to_html_directory($cop_config_logs_only);
             $tournament->TellUser('eapfail', sprintf("failed to decode JSON for COP API: $@"));
             return 0;
         }
 
         if ($response_data->{log} eq '') {
+            log_info($cop_config_logs_only, "COP API failed:\n$response");
+            copy_log_to_html_directory($cop_config_logs_only);
             $tournament->TellUser('eapfail', sprintf("COP API failed:\n" . $response));
             return 0;
         }
-
-        my $cop_config_logs_only = {
-            log_filename               => $log_filename,
-            html_log_filename          => $html_log_filename,
-        };
 
         log_info($cop_config_logs_only, $response_data->{log});
         copy_log_to_html_directory($cop_config_logs_only);
 
         if ($response_data->{error_code} ne 'SUCCESS') {
+            log_info($cop_config_logs_only, "COP API error code:\n". $response_data->{error_code} . ": " . $response_data->{error_message});
+            copy_log_to_html_directory($cop_config_logs_only);
             $tournament->TellUser('eapfail', sprintf("COP API error code: " . $response_data->{error_code} . ": " . $response_data->{error_message}));
             return 0;
         }

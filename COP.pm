@@ -312,6 +312,12 @@ sub Run ($$@) {
 
         my $json_request = encode_json($request_hash);
 
+        my @partial_rounds = get_partial_rounds( $dp, $last_paired_round0 );
+        if (@partial_rounds) {
+            printf( "Warning: pairings computed with partial results in round(s): %s\n",
+                join( ', ', @partial_rounds ) );
+        }
+
         my $api_url = 'https://woogles.io/api/pair_service.PairService/HandlePairRequest';
         my $curl_command = "curl -s -H 'Content-Type: application/json' -d '" . $json_request . "' $api_url";
         my $response = `$curl_command`;
@@ -376,6 +382,11 @@ sub Run ($$@) {
         }
 
         $this->TidyAfterPairing($dp);
+
+        if (@partial_rounds) {
+            printf( "Warning: pairings computed with partial results in round(s): %s\n",
+                join( ', ', @partial_rounds ) );
+        }
 
         # Automatically show the pairings
         my $show_pairings_command =
@@ -505,6 +516,12 @@ sub Run ($$@) {
         disallow_repeat_byes => $disallow_repeat_byes,
     };
 
+    my @partial_rounds = get_partial_rounds( $dp, $last_paired_round0 );
+    if (@partial_rounds) {
+        printf( "Warning: pairings computed with partial results in round(s): %s\n",
+            join( ', ', @partial_rounds ) );
+    }
+
     my ( $id_pairings, $warnings ) = cop(
         $cop_config,    \@tournament_players,
         \%times_played, \%previous_pairing_hash
@@ -528,6 +545,11 @@ sub Run ($$@) {
     }
 
     $this->TidyAfterPairing($dp);
+
+    if (@partial_rounds) {
+        printf( "Warning: pairings computed with partial results in round(s): %s\n",
+            join( ', ', @partial_rounds ) );
+    }
 
     # Automatically show the pairings
     my $show_pairings_command =
@@ -598,6 +620,32 @@ sub copy_log_to_html_directory {
             )
         );
     }
+}
+
+sub get_partial_rounds {
+    my ( $dp, $last_paired_round0 ) = @_;
+    my @players        = $dp->Players();
+    my @partial_rounds = ();
+    for ( my $round = 0 ; $round <= $last_paired_round0 ; $round++ ) {
+        my $has_result     = 0;
+        my $missing_result = 0;
+        for my $player (@players) {
+            next unless $player->Active();
+            my $opp_id = $player->OpponentID($round);
+            next unless defined $opp_id;
+            next if $opp_id == 0;
+            if ( $player->Score($round) ) {
+                $has_result = 1;
+            }
+            else {
+                $missing_result = 1;
+            }
+        }
+        if ( $has_result && $missing_result ) {
+            push @partial_rounds, $round + 1;
+        }
+    }
+    return @partial_rounds;
 }
 
 sub get_timestamp {

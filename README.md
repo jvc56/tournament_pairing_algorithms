@@ -14,8 +14,8 @@ config use_cop_api = 1
 config simulations = 100000
 config always_wins_simulations = 10000
 config gibson_spread = [250, 200]
-config control_loss_thresholds = [0.25]
-config hopefulness = [0.1, 0.1, 0.05, 0.02, 0.01]
+config control_loss_thresholds = [0.30]
+config hopefulness = [0.2]
 config control_loss_activation_round =12
 config cop_threads = 2
 ```

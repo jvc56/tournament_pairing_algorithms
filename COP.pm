@@ -8,7 +8,6 @@ use threads;
 use Data::Dumper;
 
 use File::Basename;
-use Graph::Matching qw(max_weight_matching);
 use JSON;
 use TSH::Command::ShowPairings;
 use TSH::PairingCommand;
@@ -2660,6 +2659,1047 @@ sub min {
         return $x;
     }
     return $y;
+}
+
+# ---------------------------------------------------------------------------
+# Maximum weight matching
+#
+# Ported by hand from the networkx implementation of Galil's blossom /
+# primal-dual algorithm for maximum-weighted matching in general graphs:
+#
+#   https://networkx.org/documentation/stable/_modules/networkx/algorithms/matching.html
+#
+# This replaces the CPAN Graph::Matching module, which implemented the
+# same algorithm (the variable and function names below are deliberately
+# kept close to both the networkx source and Graph::Matching for ease of
+# cross-reference).
+# ---------------------------------------------------------------------------
+
+package TSH::Command::COP::Blossom;
+
+# Representation of a non-trivial blossom or sub-blossom.
+#
+# childs is an ordered list of the blossom's sub-blossoms, starting with
+# the base and going round the blossom.
+#
+# edges is the list of the blossom's connecting edges, such that
+# edges->[$i] = [ $v, $w ] where $v is a vertex in childs->[$i] and $w is
+# a vertex in childs->[wrap($i+1)].
+#
+# If the blossom is a top-level S-blossom, mybestedges is a list of
+# least-slack edges to neighboring S-blossoms, or undef if no such list
+# has been computed yet. This is used for efficient computation of
+# delta3.
+
+sub new {
+    my ($class) = @_;
+    return bless { childs => [], edges => [], mybestedges => undef }, $class;
+}
+
+# Generate the blossom's leaf vertices.
+sub leaves {
+    my ($self) = @_;
+    my @stack = @{ $self->{childs} };
+    my @out;
+    while (@stack) {
+        my $t = pop @stack;
+        if ( ref($t) ) {
+            push @stack, @{ $t->{childs} };
+        }
+        else {
+            push @out, $t;
+        }
+    }
+    return @out;
+}
+
+package TSH::Command::COP;
+
+# Dummy value which is different from any node, used to mark that
+# scanBlossom() found an augmenting path rather than a new blossom base.
+my $NO_NODE = bless {}, 'TSH::Command::COP::NoNode';
+
+sub _is_blossom {
+    my ($x) = @_;
+    return ref($x) eq 'TSH::Command::COP::Blossom';
+}
+
+sub _is_no_node {
+    my ($x) = @_;
+    return ref($x) eq 'TSH::Command::COP::NoNode';
+}
+
+sub _index_of {
+    my ( $arrayref, $item ) = @_;
+    for ( my $i = 0 ; $i < scalar @{$arrayref} ; $i++ ) {
+        return $i if $arrayref->[$i] eq $item;
+    }
+    return -1;
+}
+
+sub _min_values {
+    my $m;
+    foreach my $x (@_) {
+        $m = $x if !defined($m) || $x < $m;
+    }
+    return $m;
+}
+
+=item %matching = max_weight_matching($edges, $maxcardinality)
+
+Compute a maximum-weighted matching of an undirected graph.
+
+A matching is a subset of edges in which no node occurs more than once.
+The weight of a matching is the sum of the weights of its edges. This
+function takes time O(number_of_nodes ** 3).
+
+$edges is a reference to an array of edges. An edge is described by an
+arrayref [ $v, $w, $weight ], containing the two nodes (plain scalars,
+not references) and the weight of the edge. Edges are undirected
+(usable in both directions). A pair of nodes may have at most one edge
+between them.
+
+If $maxcardinality is true, compute the maximum-cardinality matching
+with maximum weight among all maximum-cardinality matchings.
+
+The matching is returned as a hash %m, such that $m{$v} == $w if node
+$v is matched to node $w. Unmatched nodes will not occur as keys of %m.
+
+If all edge weights are integers, the algorithm uses only integer
+computations. If floating point weights are used, the algorithm could
+return a slightly suboptimal matching due to numeric precision errors.
+
+This method is based on the "blossom" method for finding augmenting
+paths and the "primal-dual" method for finding a matching of maximum
+weight, both methods invented by Jack Edmonds. See "Efficient
+Algorithms for Finding Maximum Matching in Graphs" by Zvi Galil, ACM
+Computing Surveys, 1986.
+
+=cut
+
+sub max_weight_matching {
+    my ( $edges, $maxcardinality ) = @_;
+
+    return () if !@{$edges};
+
+    # Get a list of vertices (in order of first appearance, mirroring
+    # the node order of a networkx Graph built from this edge list), and
+    # build an adjacency list and edge-weight lookup.
+    my @gnodes;
+    my %seen;
+    my %adj;
+    my %ew;
+    foreach my $e ( @{$edges} ) {
+        my ( $v, $w, $wt ) = @{$e};
+        next if $v eq $w;    # ignore self-loops
+        foreach my $u ( $v, $w ) {
+            if ( !$seen{$u} ) {
+                $seen{$u} = 1;
+                push @gnodes, $u;
+                $adj{$u} = [];
+            }
+        }
+        push @{ $adj{$v} }, $w;
+        push @{ $adj{$w} }, $v;
+        $ew{$v}{$w} = $wt;
+        $ew{$w}{$v} = $wt;
+    }
+
+    return () if !@gnodes;
+
+    # Find the maximum edge weight.
+    my $maxweight  = 0;
+    my $allinteger = 1;
+    foreach my $e ( @{$edges} ) {
+        my ( $v, $w, $wt ) = @{$e};
+        next if $v eq $w;
+        $maxweight = $wt if $wt > $maxweight;
+        $allinteger = 0 if $wt != int($wt);
+    }
+
+    # If v is a matched vertex, mate{v} is its partner vertex.
+    # If v is a single vertex, v does not occur as a key in mate.
+    # Initially all vertices are single; updated during augmentation.
+    my %mate;
+
+    # If b is a top-level blossom, label{b} is undef if b is unlabeled
+    # (free), 1 if b is an S-blossom, 2 if b is a T-blossom.
+    # The label of a vertex is found by looking at the label of its
+    # top-level containing blossom. If v is a vertex inside a T-blossom,
+    # label{v} is 2 iff v is reachable from an S-vertex outside the
+    # blossom. Labels are assigned during a stage and reset after each
+    # augmentation.
+    my %label;
+
+    # If b is a labeled top-level blossom, labeledge{b} = [ v, w ] is the
+    # edge through which b obtained its label such that w is a vertex in
+    # b, or undef if b's base vertex is single.
+    my %labeledge;
+
+    # If v is a vertex, inblossom{v} is the top-level blossom to which v
+    # belongs. If v is a top-level vertex, v is itself a (trivial)
+    # top-level blossom, so inblossom{v} == v.
+    my %inblossom;
+    foreach my $v (@gnodes) { $inblossom{$v} = $v; }
+
+    # If b is a sub-blossom, blossomparent{b} is its immediate parent
+    # (sub-)blossom. If b is a top-level blossom, blossomparent{b} is
+    # undef.
+    my %blossomparent;
+    foreach my $v (@gnodes) { $blossomparent{$v} = undef; }
+
+    # If b is a (sub-)blossom, blossombase{b} is its base vertex.
+    my %blossombase;
+    foreach my $v (@gnodes) { $blossombase{$v} = $v; }
+
+    # If w is a free vertex (or an unreached vertex inside a T-blossom),
+    # bestedge{w} = [ v, w ] is the least-slack edge from an S-vertex, or
+    # undef if there is no such edge. If b is a (possibly trivial)
+    # top-level S-blossom, bestedge{b} = [ v, w ] is the least-slack edge
+    # to a different S-blossom (v inside b), or undef if there is no such
+    # edge. This is used for efficient computation of delta2 and delta3.
+    my %bestedge;
+
+    # dualvar{v} = 2 * u(v), where u(v) is v's variable in the dual
+    # optimization problem (multiplication by two ensures integer values
+    # throughout the algorithm if all edge weights are integers).
+    my %dualvar;
+    foreach my $v (@gnodes) { $dualvar{$v} = $maxweight; }
+
+    # If b is a non-trivial blossom, blossomdual{b} = z(b), b's variable
+    # in the dual optimization problem.
+    my %blossomdual;
+
+    # Blossoms are Perl objects, and can't be recovered from a
+    # stringified hash key, so keep them in an array in creation order
+    # (mirroring the insertion order of a Python dict) along with a
+    # liveness flag so they can be iterated like blossomparent/
+    # blossomdual keys without losing the reference.
+    my @blossom_order;
+    my %blossom_alive;
+
+    # If ("$v,$w") or ("$w,$v") is a key in allowedge, then the edge
+    # (v, w) is known to have zero slack in the optimization problem;
+    # otherwise the edge may or may not have zero slack.
+    my %allowedge;
+
+    # Queue of newly discovered S-vertices.
+    my @queue;
+
+    # Return 2 * slack of edge (v, w) (does not work inside blossoms).
+    my $slack = sub {
+        my ( $v, $w ) = @_;
+        return $dualvar{$v} + $dualvar{$w} - 2 * $ew{$v}{$w};
+    };
+
+    # Assign label t to the top-level blossom containing vertex w,
+    # coming through an edge from vertex v (or undef).
+    my $assignLabel;
+    $assignLabel = sub {
+        my ( $w, $t, $v ) = @_;
+        my $b = $inblossom{$w};
+        $label{$w} = $label{$b} = $t;
+        if ( defined $v ) {
+            $labeledge{$w} = $labeledge{$b} = [ $v, $w ];
+        }
+        else {
+            $labeledge{$w} = $labeledge{$b} = undef;
+        }
+        $bestedge{$w} = $bestedge{$b} = undef;
+        if ( $t == 1 ) {
+
+            # b became an S-vertex/blossom; add it(s vertices) to the queue.
+            if ( _is_blossom($b) ) {
+                push @queue, $b->leaves();
+            }
+            else {
+                push @queue, $b;
+            }
+        }
+        elsif ( $t == 2 ) {
+
+            # b became a T-vertex/blossom; assign label S to its mate.
+            # (If b is a non-trivial blossom, its base is the only
+            # vertex with an external mate.)
+            my $base = $blossombase{$b};
+            $assignLabel->( $mate{$base}, 1, $base );
+        }
+    };
+
+    # Trace back from vertices v and w to discover either a new blossom
+    # or an augmenting path. Return the base vertex of the new blossom,
+    # or $NO_NODE if an augmenting path was found.
+    my $scanBlossom = sub {
+        my ( $v, $w ) = @_;
+        my @path;
+        my $base = $NO_NODE;
+        while ( !_is_no_node($v) ) {
+
+            # Look for a breadcrumb in v's blossom or put a new breadcrumb.
+            my $b = $inblossom{$v};
+            if ( $label{$b} & 4 ) {
+                $base = $blossombase{$b};
+                last;
+            }
+            push @path, $b;
+            $label{$b} = 5;
+
+            # Trace one step back.
+            if ( !defined $labeledge{$b} ) {
+
+                # The base of blossom b is single; stop tracing this path.
+                $v = $NO_NODE;
+            }
+            else {
+                $v = $labeledge{$b}[0];
+                $b = $inblossom{$v};
+
+                # b is a T-blossom; trace one more step back.
+                $v = $labeledge{$b}[0];
+            }
+
+            # Swap v and w so that we alternate between both paths.
+            if ( !_is_no_node($w) ) {
+                ( $v, $w ) = ( $w, $v );
+            }
+        }
+
+        # Remove breadcrumbs.
+        foreach my $b (@path) { $label{$b} = 1; }
+
+        # Return base vertex, if we found one.
+        return $base;
+    };
+
+    # Construct a new blossom with given base, through S-vertices v and
+    # w. Label the new blossom as S; set its dual variable to zero;
+    # relabel its T-vertices to S and add them to the queue.
+    my $addBlossom = sub {
+        my ( $base, $v, $w ) = @_;
+        my $bb = $inblossom{$base};
+        my $bv = $inblossom{$v};
+        my $bw = $inblossom{$w};
+
+        # Create blossom.
+        my $b = TSH::Command::COP::Blossom::new('TSH::Command::COP::Blossom');
+        $blossombase{$b}    = $base;
+        $blossomparent{$b}  = undef;
+        $blossomparent{$bb} = $b;
+        push @blossom_order, $b;
+        $blossom_alive{$b} = 1;
+
+        # Make list of sub-blossoms and their interconnecting edge
+        # endpoints.
+        my @path;
+        my @edgs = ( [ $v, $w ] );
+
+        # Trace back from v to base.
+        while ( $bv ne $bb ) {
+            $blossomparent{$bv} = $b;
+            push @path, $bv;
+            push @edgs, $labeledge{$bv};
+            $v  = $labeledge{$bv}[0];
+            $bv = $inblossom{$v};
+        }
+
+        # Add base sub-blossom; reverse lists.
+        push @path, $bb;
+        @path = reverse @path;
+        @edgs = reverse @edgs;
+
+        # Trace back from w to base.
+        while ( $bw ne $bb ) {
+            $blossomparent{$bw} = $b;
+            push @path, $bw;
+            push @edgs, [ $labeledge{$bw}[1], $labeledge{$bw}[0] ];
+            $w  = $labeledge{$bw}[0];
+            $bw = $inblossom{$w};
+        }
+
+        $b->{childs} = \@path;
+        $b->{edges}  = \@edgs;
+
+        # Set label to S.
+        $label{$b}     = 1;
+        $labeledge{$b} = $labeledge{$bb};
+
+        # Set dual variable to zero.
+        $blossomdual{$b} = 0;
+
+        # Relabel vertices.
+        foreach my $leaf ( $b->leaves() ) {
+            if ( defined( $label{ $inblossom{$leaf} } )
+                && $label{ $inblossom{$leaf} } == 2 )
+            {
+                # This T-vertex now turns into an S-vertex because it
+                # becomes part of an S-blossom; add it to the queue.
+                push @queue, $leaf;
+            }
+            $inblossom{$leaf} = $b;
+        }
+
+        # Compute b's list of least-slack edges to neighboring blossoms.
+        my %bestedgeto;
+        my @bestedgeto_order;
+        foreach my $bv_child (@path) {
+            my @nblist;
+            if ( _is_blossom($bv_child) ) {
+                if ( defined $bv_child->{mybestedges} ) {
+
+                    # Walk this subblossom's least-slack edges.
+                    @nblist = @{ $bv_child->{mybestedges} };
+
+                    # The sub-blossom won't need this data again.
+                    $bv_child->{mybestedges} = undef;
+                }
+                else {
+                    # This subblossom does not have a list of
+                    # least-slack edges; get the information from the
+                    # vertices.
+                    foreach my $leaf ( $bv_child->leaves() ) {
+                        foreach my $nb ( @{ $adj{$leaf} } ) {
+                            next if $leaf eq $nb;
+                            push @nblist, [ $leaf, $nb ];
+                        }
+                    }
+                }
+            }
+            else {
+                foreach my $nb ( @{ $adj{$bv_child} } ) {
+                    next if $bv_child eq $nb;
+                    push @nblist, [ $bv_child, $nb ];
+                }
+            }
+            foreach my $k (@nblist) {
+                my ( $i, $j ) = @{$k};
+                if ( $inblossom{$j} eq $b ) {
+                    ( $i, $j ) = ( $j, $i );
+                }
+                my $bj = $inblossom{$j};
+                if (   $bj ne $b
+                    && defined( $label{$bj} )
+                    && $label{$bj} == 1
+                    && ( !exists( $bestedgeto{$bj} )
+                        || $slack->( $i, $j ) < $slack->( @{ $bestedgeto{$bj} } ) )
+                  )
+                {
+                    push @bestedgeto_order, $bj if !exists( $bestedgeto{$bj} );
+                    $bestedgeto{$bj} = [ $i, $j ];
+                }
+            }
+
+            # Forget about least-slack edge of the subblossom.
+            $bestedge{$bv_child} = undef;
+        }
+        $b->{mybestedges} = [ map { $bestedgeto{$_} } @bestedgeto_order ];
+
+        # Select bestedge{b}.
+        my $mybestedge;
+        my $mybestslack;
+        $bestedge{$b} = undef;
+        foreach my $k ( @{ $b->{mybestedges} } ) {
+            my $kslack = $slack->( @{$k} );
+            if ( !defined($mybestedge) || $kslack < $mybestslack ) {
+                $mybestedge  = $k;
+                $mybestslack = $kslack;
+            }
+        }
+        $bestedge{$b} = $mybestedge;
+    };
+
+    # Expand the given top-level blossom.
+    my $expandBlossom;
+    $expandBlossom = sub {
+        my ( $b, $endstage ) = @_;
+
+        # Convert sub-blossoms into top-level blossoms.
+        foreach my $s ( @{ $b->{childs} } ) {
+            $blossomparent{$s} = undef;
+            if ( _is_blossom($s) ) {
+                if ( $endstage && $blossomdual{$s} == 0 ) {
+
+                    # Recursively expand this sub-blossom.
+                    $expandBlossom->( $s, $endstage );
+                }
+                else {
+                    foreach my $leaf ( $s->leaves() ) { $inblossom{$leaf} = $s; }
+                }
+            }
+            else {
+                $inblossom{$s} = $s;
+            }
+        }
+
+        # If we expand a T-blossom during a stage, its sub-blossoms must
+        # be relabeled.
+        if ( !$endstage && defined( $label{$b} ) && $label{$b} == 2 ) {
+
+            # Start at the sub-blossom through which the expanding
+            # blossom obtained its label, and relabel sub-blossoms until
+            # we reach the base. Figure out through which sub-blossom
+            # the expanding blossom obtained its label initially.
+            my $entrychild = $inblossom{ $labeledge{$b}[1] };
+
+            # Decide in which direction we will go round the blossom.
+            my $j = _index_of( $b->{childs}, $entrychild );
+            my $jstep;
+            if ( $j & 1 ) {
+
+                # Start index is odd; go forward and wrap.
+                $j -= scalar( @{ $b->{childs} } );
+                $jstep = 1;
+            }
+            else {
+                # Start index is even; go backward.
+                $jstep = -1;
+            }
+
+            # Move along the blossom until we get to the base.
+            my ( $v, $w ) = @{ $labeledge{$b} };
+            while ( $j != 0 ) {
+
+                # Relabel the T-sub-blossom.
+                my ( $p, $q );
+                if ( $jstep == 1 ) {
+                    ( $p, $q ) = @{ $b->{edges}[$j] };
+                }
+                else {
+                    ( $q, $p ) = @{ $b->{edges}[ $j - 1 ] };
+                }
+                $label{$w} = undef;
+                $label{$q} = undef;
+                $assignLabel->( $w, 2, $v );
+
+                # Step to the next S-sub-blossom and note its forward edge.
+                $allowedge{"$p,$q"} = 1;
+                $allowedge{"$q,$p"} = 1;
+                $j += $jstep;
+                if ( $jstep == 1 ) {
+                    ( $v, $w ) = @{ $b->{edges}[$j] };
+                }
+                else {
+                    ( $w, $v ) = @{ $b->{edges}[ $j - 1 ] };
+                }
+
+                # Step to the next T-sub-blossom.
+                $allowedge{"$v,$w"} = 1;
+                $allowedge{"$w,$v"} = 1;
+                $j += $jstep;
+            }
+
+            # Relabel the base T-sub-blossom WITHOUT stepping through to
+            # its mate (so don't call assignLabel).
+            my $bw = $b->{childs}[$j];
+            $label{$w}     = $label{$bw}     = 2;
+            $labeledge{$w} = $labeledge{$bw} = [ $v, $w ];
+            $bestedge{$bw} = undef;
+
+            # Continue along the blossom until we get back to entrychild.
+            $j += $jstep;
+            while ( $b->{childs}[$j] ne $entrychild ) {
+
+                # Examine the vertices of the sub-blossom to see whether
+                # it is reachable from a neighboring S-vertex outside the
+                # expanding blossom.
+                my $bv = $b->{childs}[$j];
+                if ( defined( $label{$bv} ) && $label{$bv} == 1 ) {
+
+                    # This sub-blossom just got label S through one of
+                    # its neighbors; leave it be.
+                    $j += $jstep;
+                    next;
+                }
+                my $reachable;
+                if ( _is_blossom($bv) ) {
+                    foreach my $leaf ( $bv->leaves() ) {
+                        if ( $label{$leaf} ) {
+                            $reachable = $leaf;
+                            last;
+                        }
+                    }
+                }
+                else {
+                    $reachable = $bv;
+                }
+
+                # If the sub-blossom contains a reachable vertex, assign
+                # label T to the sub-blossom.
+                if ( defined($reachable) && $label{$reachable} ) {
+                    $label{$reachable} = undef;
+                    $label{ $mate{ $blossombase{$bv} } } = undef;
+                    $assignLabel->( $reachable, 2, $labeledge{$reachable}[0] );
+                }
+                $j += $jstep;
+            }
+        }
+
+        # Remove the expanded blossom entirely.
+        delete $label{$b};
+        delete $labeledge{$b};
+        delete $bestedge{$b};
+        delete $blossomparent{$b};
+        delete $blossombase{$b};
+        delete $blossomdual{$b};
+        delete $blossom_alive{$b};
+    };
+
+    # Swap matched/unmatched edges over an alternating path through
+    # blossom b between vertex v and the base vertex. Keep blossom
+    # bookkeeping consistent.
+    my $augmentBlossom;
+    $augmentBlossom = sub {
+        my ( $b, $v ) = @_;
+
+        # Bubble up through the blossom tree from vertex v to an
+        # immediate sub-blossom of b.
+        my $t = $v;
+        while ( ( $blossomparent{$t} // '' ) ne $b ) {
+            $t = $blossomparent{$t};
+        }
+
+        # Recursively deal with the first sub-blossom.
+        $augmentBlossom->( $t, $v ) if _is_blossom($t);
+
+        # Decide in which direction we will go round the blossom.
+        my $i = _index_of( $b->{childs}, $t );
+        my $j = $i;
+        my $jstep;
+        if ( $i & 1 ) {
+            $j -= scalar( @{ $b->{childs} } );
+            $jstep = 1;
+        }
+        else {
+            $jstep = -1;
+        }
+
+        # Move along the blossom until we get to the base.
+        while ( $j != 0 ) {
+
+            # Step to the next sub-blossom and augment it recursively.
+            $j += $jstep;
+            $t = $b->{childs}[$j];
+            my ( $w, $x );
+            if ( $jstep == 1 ) {
+                ( $w, $x ) = @{ $b->{edges}[$j] };
+            }
+            else {
+                ( $x, $w ) = @{ $b->{edges}[ $j - 1 ] };
+            }
+            $augmentBlossom->( $t, $w ) if _is_blossom($t);
+
+            # Step to the next sub-blossom and augment it recursively.
+            $j += $jstep;
+            $t = $b->{childs}[$j];
+            $augmentBlossom->( $t, $x ) if _is_blossom($t);
+
+            # Match the edge connecting those sub-blossoms.
+            $mate{$w} = $x;
+            $mate{$x} = $w;
+        }
+
+        # Rotate the list of sub-blossoms to put the new base at the front.
+        my @childs = @{ $b->{childs} };
+        my @edges  = @{ $b->{edges} };
+        $b->{childs} = [ @childs[ $i .. $#childs ], @childs[ 0 .. $i - 1 ] ];
+        $b->{edges}  = [ @edges[ $i .. $#edges ],   @edges[ 0 .. $i - 1 ] ];
+        $blossombase{$b} = $blossombase{ $b->{childs}[0] };
+    };
+
+    # Swap matched/unmatched edges over an alternating path between two
+    # single vertices. The augmenting path runs through S-vertices v and w.
+    my $augmentMatching = sub {
+        my ( $v, $w ) = @_;
+        foreach my $pair ( [ $v, $w ], [ $w, $v ] ) {
+            my ( $s, $j ) = @{$pair};
+
+            # Match vertex s to vertex j. Then trace back from s until we
+            # find a single vertex, swapping matched and unmatched edges
+            # as we go.
+            while (1) {
+                my $bs = $inblossom{$s};
+
+                # Augment through the S-blossom from s to base.
+                $augmentBlossom->( $bs, $s ) if _is_blossom($bs);
+
+                # Update mate{s}.
+                $mate{$s} = $j;
+
+                # Trace one step back.
+                if ( !defined $labeledge{$bs} ) {
+
+                    # Reached single vertex; stop.
+                    last;
+                }
+                my $t  = $labeledge{$bs}[0];
+                my $bt = $inblossom{$t};
+
+                # Trace one more step back.
+                ( $s, $j ) = @{ $labeledge{$bt} };
+
+                # Augment through the T-blossom from j to base.
+                $augmentBlossom->( $bt, $j ) if _is_blossom($bt);
+
+                # Update mate{j}.
+                $mate{$j} = $s;
+            }
+        }
+    };
+
+    # Verify that the optimum solution has been reached.
+    my $verifyOptimum = sub {
+        my $vdualoffset = 0;
+        if ($maxcardinality) {
+
+            # Vertices may have negative dual; find a constant
+            # non-negative number to add to all vertex duals.
+            my $mindual = _min_values( values %dualvar );
+            $vdualoffset = ( -$mindual > 0 ) ? -$mindual : 0;
+        }
+
+        # 0. all dual variables are non-negative
+        die "max_weight_matching: negative vertex dual variable"
+          if ( _min_values( values %dualvar ) + $vdualoffset < 0 );
+        if (%blossomdual) {
+            die "max_weight_matching: negative blossom dual variable"
+              if ( _min_values( values %blossomdual ) < 0 );
+        }
+
+        # 0. all edges have non-negative slack and
+        # 1. all matched edges have zero slack;
+        foreach my $e ( @{$edges} ) {
+            my ( $i, $j, $wt ) = @{$e};
+            next if $i eq $j;    # ignore self-loops
+            my $s = $dualvar{$i} + $dualvar{$j} - 2 * $wt;
+            my @iblossoms = ($i);
+            my @jblossoms = ($j);
+            while ( defined( $blossomparent{ $iblossoms[-1] } ) ) {
+                push @iblossoms, $blossomparent{ $iblossoms[-1] };
+            }
+            while ( defined( $blossomparent{ $jblossoms[-1] } ) ) {
+                push @jblossoms, $blossomparent{ $jblossoms[-1] };
+            }
+            @iblossoms = reverse @iblossoms;
+            @jblossoms = reverse @jblossoms;
+            my $lim =
+              ( $#iblossoms < $#jblossoms ) ? $#iblossoms : $#jblossoms;
+            for my $idx ( 0 .. $lim ) {
+                my $bi = $iblossoms[$idx];
+                my $bj = $jblossoms[$idx];
+                last if $bi ne $bj;
+                $s += 2 * $blossomdual{$bi};
+            }
+            die "max_weight_matching: negative slack on edge $i-$j"
+              if $s < 0;
+            if (   ( exists( $mate{$i} ) && $mate{$i} eq $j )
+                || ( exists( $mate{$j} ) && $mate{$j} eq $i ) )
+            {
+                die "max_weight_matching: matched edge $i-$j has non-zero slack"
+                  if $s != 0;
+            }
+        }
+
+        # 2. all single vertices have zero dual value;
+        foreach my $v (@gnodes) {
+            die "max_weight_matching: unmatched vertex $v has non-zero dual"
+              unless ( exists( $mate{$v} ) || $dualvar{$v} + $vdualoffset == 0 );
+        }
+
+        # 3. all blossoms with positive dual value are full.
+        foreach my $bkey (@blossom_order) {
+            next unless $blossom_alive{$bkey};
+            if ( $blossomdual{$bkey} > 0 ) {
+                die "max_weight_matching: full blossom has even number of edges"
+                  if ( scalar( @{ $bkey->{edges} } ) % 2 == 0 );
+                for ( my $idx = 1 ; $idx < scalar( @{ $bkey->{edges} } ) ; $idx += 2 )
+                {
+                    my ( $i, $j ) = @{ $bkey->{edges}[$idx] };
+                    die "max_weight_matching: blossom edge not matched"
+                      unless ( $mate{$i} eq $j && $mate{$j} eq $i );
+                }
+            }
+        }
+    };
+
+    # Main loop: continue until no further improvement is possible.
+    while (1) {
+
+        # Each iteration of this loop is a "stage".
+        # A stage finds an augmenting path and uses that to improve the
+        # matching.
+
+        # Remove labels from top-level blossoms/vertices.
+        %label     = ();
+        %labeledge = ();
+
+        # Forget all about least-slack edges.
+        %bestedge = ();
+        foreach my $bkey (@blossom_order) {
+            next unless $blossom_alive{$bkey};
+            $bkey->{mybestedges} = undef;
+        }
+
+        # Loss of labeling means that we can not be sure that currently
+        # allowable edges remain allowable throughout this stage.
+        %allowedge = ();
+
+        # Make queue empty.
+        @queue = ();
+
+        # Label single blossoms/vertices with S and put them in the queue.
+        foreach my $v (@gnodes) {
+            if ( !exists( $mate{$v} ) && !defined( $label{ $inblossom{$v} } ) ) {
+                $assignLabel->( $v, 1, undef );
+            }
+        }
+
+        # Loop until we succeed in augmenting the matching.
+        my $augmented = 0;
+        while (1) {
+
+            # Each iteration of this loop is a "substage".
+            # A substage tries to find an augmenting path; if found, the
+            # path is used to improve the matching and the stage ends.
+            # If there is no augmenting path, the primal-dual method is
+            # used to pump some slack out of the dual variables.
+
+            # Continue labeling until all vertices which are reachable
+            # through an alternating path have got a label.
+            while ( @queue && !$augmented ) {
+
+                # Take an S vertex from the queue.
+                my $v = pop @queue;
+
+                # Scan its neighbors:
+                foreach my $w ( @{ $adj{$v} } ) {
+                    next if $w eq $v;    # ignore self-loops
+
+                    my $bv = $inblossom{$v};
+                    my $bw = $inblossom{$w};
+                    if ( $bv eq $bw ) {
+
+                        # this edge is internal to a blossom; ignore it
+                        next;
+                    }
+                    my $kslack;
+                    if ( !$allowedge{"$v,$w"} ) {
+                        $kslack = $slack->( $v, $w );
+                        if ( $kslack <= 0 ) {
+
+                            # edge k has zero slack => it is allowable
+                            $allowedge{"$v,$w"} = 1;
+                            $allowedge{"$w,$v"} = 1;
+                        }
+                    }
+                    if ( $allowedge{"$v,$w"} ) {
+                        if ( !defined( $label{$bw} ) ) {
+
+                            # (C1) w is a free vertex;
+                            # label w with T and label its mate with S (R12).
+                            $assignLabel->( $w, 2, $v );
+                        }
+                        elsif ( $label{$bw} == 1 ) {
+
+                            # (C2) w is an S-vertex (not in the same
+                            # blossom); follow back-links to discover
+                            # either an augmenting path or a new blossom.
+                            my $base = $scanBlossom->( $v, $w );
+                            if ( !_is_no_node($base) ) {
+
+                                # Found a new blossom; add it to the
+                                # blossom bookkeeping and turn it into an
+                                # S-blossom.
+                                $addBlossom->( $base, $v, $w );
+                            }
+                            else {
+                                # Found an augmenting path; augment the
+                                # matching and end this stage.
+                                $augmentMatching->( $v, $w );
+                                $augmented = 1;
+                                last;
+                            }
+                        }
+                        elsif ( !defined( $label{$w} ) ) {
+
+                            # w is inside a T-blossom, but w itself has
+                            # not yet been reached from outside the
+                            # blossom; mark it as reached (we need this
+                            # to relabel during T-blossom expansion).
+                            $label{$w}     = 2;
+                            $labeledge{$w} = [ $v, $w ];
+                        }
+                    }
+                    elsif ( defined( $label{$bw} ) && $label{$bw} == 1 ) {
+
+                        # keep track of the least-slack non-allowable
+                        # edge to a different S-blossom.
+                        if ( !defined( $bestedge{$bv} )
+                            || $kslack < $slack->( @{ $bestedge{$bv} } ) )
+                        {
+                            $bestedge{$bv} = [ $v, $w ];
+                        }
+                    }
+                    elsif ( !defined( $label{$w} ) ) {
+
+                        # w is a free vertex (or an unreached vertex
+                        # inside a T-blossom) but we can not reach it
+                        # yet; keep track of the least-slack edge that
+                        # reaches w.
+                        if ( !defined( $bestedge{$w} )
+                            || $kslack < $slack->( @{ $bestedge{$w} } ) )
+                        {
+                            $bestedge{$w} = [ $v, $w ];
+                        }
+                    }
+                }
+            }
+
+            last if $augmented;
+
+            # There is no augmenting path under these constraints;
+            # compute delta and reduce slack in the optimization
+            # problem. (Note that our vertex dual variables, edge slacks
+            # and delta's are pre-multiplied by two.)
+            my $deltatype = -1;
+            my ( $delta, $deltaedge, $deltablossom );
+
+            # Compute delta1: the minimum value of any vertex dual.
+            if ( !$maxcardinality ) {
+                $deltatype = 1;
+                $delta     = _min_values( values %dualvar );
+            }
+
+            # Compute delta2: the minimum slack on any edge between an
+            # S-vertex and a free vertex.
+            foreach my $v (@gnodes) {
+                if ( !defined( $label{ $inblossom{$v} } )
+                    && defined( $bestedge{$v} ) )
+                {
+                    my $d = $slack->( @{ $bestedge{$v} } );
+                    if ( $deltatype == -1 || $d < $delta ) {
+                        $delta     = $d;
+                        $deltatype = 2;
+                        $deltaedge = $bestedge{$v};
+                    }
+                }
+            }
+
+            # Compute delta3: half the minimum slack on any edge between
+            # a pair of S-blossoms.
+            foreach my $bkey ( @gnodes, @blossom_order ) {
+                next if ref($bkey) && !$blossom_alive{$bkey};
+                next if defined( $blossomparent{$bkey} );
+                next unless defined( $label{$bkey} ) && $label{$bkey} == 1;
+                next unless defined( $bestedge{$bkey} );
+                my $kslack = $slack->( @{ $bestedge{$bkey} } );
+                my $d = $allinteger ? $kslack / 2 : $kslack / 2.0;
+                if ( $deltatype == -1 || $d < $delta ) {
+                    $delta     = $d;
+                    $deltatype = 3;
+                    $deltaedge = $bestedge{$bkey};
+                }
+            }
+
+            # Compute delta4: minimum z variable of any T-blossom.
+            foreach my $bkey (@blossom_order) {
+                next unless $blossom_alive{$bkey};
+                next if defined( $blossomparent{$bkey} );
+                next unless defined( $label{$bkey} ) && $label{$bkey} == 2;
+                if ( $deltatype == -1 || $blossomdual{$bkey} < $delta ) {
+                    $delta        = $blossomdual{$bkey};
+                    $deltatype    = 4;
+                    $deltablossom = $bkey;
+                }
+            }
+
+            if ( $deltatype == -1 ) {
+
+                # No further improvement possible; max-cardinality
+                # optimum reached. Do a final delta update to make the
+                # optimum verifiable.
+                $deltatype = 1;
+                my $mn = _min_values( values %dualvar );
+                $delta = ( $mn > 0 ) ? $mn : 0;
+            }
+
+            # Update dual variables according to delta.
+            foreach my $v (@gnodes) {
+                if ( defined( $label{ $inblossom{$v} } )
+                    && $label{ $inblossom{$v} } == 1 )
+                {
+                    # S-vertex: 2*u = 2*u - 2*delta
+                    $dualvar{$v} -= $delta;
+                }
+                elsif ( defined( $label{ $inblossom{$v} } )
+                    && $label{ $inblossom{$v} } == 2 )
+                {
+                    # T-vertex: 2*u = 2*u + 2*delta
+                    $dualvar{$v} += $delta;
+                }
+            }
+            foreach my $bkey (@blossom_order) {
+                next unless $blossom_alive{$bkey};
+                next if defined( $blossomparent{$bkey} );
+                if ( defined( $label{$bkey} ) && $label{$bkey} == 1 ) {
+
+                    # top-level S-blossom: z = z + 2*delta
+                    $blossomdual{$bkey} += $delta;
+                }
+                elsif ( defined( $label{$bkey} ) && $label{$bkey} == 2 ) {
+
+                    # top-level T-blossom: z = z - 2*delta
+                    $blossomdual{$bkey} -= $delta;
+                }
+            }
+
+            # Take action at the point where minimum delta occurred.
+            if ( $deltatype == 1 ) {
+
+                # No further improvement possible; optimum reached.
+                last;
+            }
+            elsif ( $deltatype == 2 ) {
+
+                # Use the least-slack edge to continue the search.
+                my ( $v, $w ) = @{$deltaedge};
+                $allowedge{"$v,$w"} = 1;
+                $allowedge{"$w,$v"} = 1;
+                push @queue, $v;
+            }
+            elsif ( $deltatype == 3 ) {
+
+                # Use the least-slack edge to continue the search.
+                my ( $v, $w ) = @{$deltaedge};
+                $allowedge{"$v,$w"} = 1;
+                $allowedge{"$w,$v"} = 1;
+                push @queue, $v;
+            }
+            elsif ( $deltatype == 4 ) {
+
+                # Expand the least-z blossom.
+                $expandBlossom->( $deltablossom, 0 );
+            }
+
+            # End of this substage.
+        }
+
+        # Stop when no more augmenting path can be found.
+        last if !$augmented;
+
+        # End of a stage; expand all S-blossoms which have zero dual.
+        my @snapshot = grep { $blossom_alive{$_} } @blossom_order;
+        foreach my $bkey (@snapshot) {
+            next unless $blossom_alive{$bkey};    # already expanded
+            next if defined( $blossomparent{$bkey} );
+            next unless defined( $label{$bkey} ) && $label{$bkey} == 1;
+            next unless $blossomdual{$bkey} == 0;
+            $expandBlossom->( $bkey, 1 );
+        }
+    }
+
+    # Verify that we reached the optimum solution (only for integer weights).
+    $verifyOptimum->() if $allinteger;
+
+    return %mate;
 }
 
 1;

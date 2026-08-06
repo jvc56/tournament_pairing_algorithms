@@ -8,12 +8,17 @@ use threads;
 use Data::Dumper;
 
 use File::Basename;
-use JSON;
 use TSH::Command::ShowPairings;
 use TSH::PairingCommand;
 use File::Copy;
 
 our (@ISA) = qw(TSH::PairingCommand);
+
+# Forward declarations so the JSON::true/JSON::false barewords used
+# below resolve at compile time; the subs themselves are defined with
+# the rest of the JSON replacement code near the end of this file.
+sub JSON::true;
+sub JSON::false;
 
 use constant PROHIBITIVE_WEIGHT              => 1000000;
 use constant BYE_PLAYER_ID                   => 0;
@@ -3700,6 +3705,297 @@ sub max_weight_matching {
     $verifyOptimum->() if $allinteger;
 
     return %mate;
+}
+
+# ---------------------------------------------------------------------------
+# JSON encoding/decoding
+#
+# A small, dependency-free replacement for the CPAN JSON module, covering
+# just what the COP API request/response needs: encode_json() and
+# decode_json() (matching the JSON module's functional interface), plus
+# JSON::true / JSON::false boolean singletons.
+# ---------------------------------------------------------------------------
+
+package JSON;
+
+# Singleton objects representing the JSON literals true/false. Any other
+# value is encoded as a JSON object/array/string/number/null.
+my $TRUE  = bless( \( my $json_true_flag  = 1 ), 'JSON::Boolean' );
+my $FALSE = bless( \( my $json_false_flag = 0 ), 'JSON::Boolean' );
+
+sub true  { return $TRUE; }
+sub false { return $FALSE; }
+
+package TSH::Command::COP;
+
+=item $json_text = encode_json($data)
+
+Encode a Perl data structure (nested hashrefs, arrayrefs, plain
+scalars, undef, and JSON::true/JSON::false) as a JSON string.
+
+=cut
+
+sub encode_json {
+    my ($data) = @_;
+    return _json_encode_value($data);
+}
+
+sub _json_encode_value {
+    my ($v) = @_;
+
+    return 'null' if !defined($v);
+
+    my $ref = ref($v);
+    if ( $ref eq 'HASH' ) {
+        return _json_encode_object($v);
+    }
+    elsif ( $ref eq 'ARRAY' ) {
+        return _json_encode_array($v);
+    }
+    elsif ( $ref eq 'JSON::Boolean' ) {
+        return $$v ? 'true' : 'false';
+    }
+    elsif ($ref) {
+
+        # Not a type this encoder understands; fall back to stringifying.
+        return _json_encode_string("$v");
+    }
+    elsif ( _looks_like_json_number($v) ) {
+        return $v + 0;
+    }
+    else {
+        return _json_encode_string($v);
+    }
+}
+
+sub _json_encode_object {
+    my ($h) = @_;
+    return '{'
+      . join( ',',
+        map { _json_encode_string($_) . ':' . _json_encode_value( $h->{$_} ) }
+          sort keys %{$h} )
+      . '}';
+}
+
+sub _json_encode_array {
+    my ($a) = @_;
+    return '[' . join( ',', map { _json_encode_value($_) } @{$a} ) . ']';
+}
+
+my %JSON_ESCAPE = (
+    "\\" => '\\\\',
+    "\"" => '\\"',
+    "\n" => '\\n',
+    "\r" => '\\r',
+    "\t" => '\\t',
+    "\b" => '\\b',
+    "\f" => '\\f',
+);
+
+sub _json_encode_string {
+    my ($s) = @_;
+    $s = '' if !defined($s);
+    $s =~ s/([\\"\n\r\t\b\f])/$JSON_ESCAPE{$1}/ge;
+    $s =~ s/([\x00-\x1f])/sprintf('\\u%04x', ord($1))/ge;
+    return '"' . $s . '"';
+}
+
+# A conservative, JSON::PP-style duck-typed check for whether a plain
+# scalar should be encoded as a JSON number rather than a JSON string.
+sub _looks_like_json_number {
+    my ($s) = @_;
+    return 0 if !defined($s) || $s eq '';
+    return $s =~ /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/;
+}
+
+=item $data = decode_json($json_text)
+
+Decode a JSON string into Perl data structures: hashrefs for objects,
+arrayrefs for arrays, plain scalars for strings/numbers, 1/0 for
+true/false, and undef for null. Dies on malformed input.
+
+=cut
+
+sub decode_json {
+    my ($text) = @_;
+    $text = '' if !defined($text);
+    my $pos = 0;
+    my $len = length($text);
+
+    my (
+        $skip_ws,     $parse_value,  $parse_string,
+        $parse_number, $parse_array, $parse_object
+    );
+
+    $skip_ws = sub {
+        $pos++
+          while ( $pos < $len && substr( $text, $pos, 1 ) =~ /[ \t\r\n]/ );
+    };
+
+    $parse_string = sub {
+        die "decode_json: expected string at position $pos"
+          unless substr( $text, $pos, 1 ) eq '"';
+        $pos++;
+        my $out = '';
+        while (1) {
+            die "decode_json: unterminated string" if $pos >= $len;
+            my $c = substr( $text, $pos, 1 );
+            if ( $c eq '"' ) {
+                $pos++;
+                last;
+            }
+            elsif ( $c eq '\\' ) {
+                $pos++;
+                my $esc = substr( $text, $pos, 1 );
+                if    ( $esc eq '"' )  { $out .= '"'; }
+                elsif ( $esc eq '\\' ) { $out .= '\\'; }
+                elsif ( $esc eq '/' )  { $out .= '/'; }
+                elsif ( $esc eq 'n' )  { $out .= "\n"; }
+                elsif ( $esc eq 't' )  { $out .= "\t"; }
+                elsif ( $esc eq 'r' )  { $out .= "\r"; }
+                elsif ( $esc eq 'b' )  { $out .= "\b"; }
+                elsif ( $esc eq 'f' )  { $out .= "\f"; }
+                elsif ( $esc eq 'u' ) {
+                    my $hex = substr( $text, $pos + 1, 4 );
+                    die "decode_json: bad \\u escape"
+                      unless $hex =~ /^[0-9a-fA-F]{4}$/;
+                    $out .= chr( hex($hex) );
+                    $pos += 4;
+                }
+                else {
+                    die "decode_json: bad escape '\\$esc'";
+                }
+                $pos++;
+            }
+            else {
+                $out .= $c;
+                $pos++;
+            }
+        }
+        return $out;
+    };
+
+    $parse_number = sub {
+        my $start = $pos;
+        $pos++ if substr( $text, $pos, 1 ) eq '-';
+        $pos++ while ( $pos < $len && substr( $text, $pos, 1 ) =~ /[0-9]/ );
+        if ( $pos < $len && substr( $text, $pos, 1 ) eq '.' ) {
+            $pos++;
+            $pos++
+              while ( $pos < $len && substr( $text, $pos, 1 ) =~ /[0-9]/ );
+        }
+        if ( $pos < $len && substr( $text, $pos, 1 ) =~ /[eE]/ ) {
+            $pos++;
+            $pos++
+              if ( $pos < $len && substr( $text, $pos, 1 ) =~ /[+-]/ );
+            $pos++
+              while ( $pos < $len && substr( $text, $pos, 1 ) =~ /[0-9]/ );
+        }
+        my $numstr = substr( $text, $start, $pos - $start );
+        die "decode_json: invalid number at position $start"
+          if ( $numstr eq '' || $numstr eq '-' );
+        return $numstr + 0;
+    };
+
+    $parse_array = sub {
+        $pos++;    # skip '['
+        my @out;
+        $skip_ws->();
+        if ( substr( $text, $pos, 1 ) eq ']' ) {
+            $pos++;
+            return \@out;
+        }
+        while (1) {
+            $skip_ws->();
+            push @out, $parse_value->();
+            $skip_ws->();
+            my $c = substr( $text, $pos, 1 );
+            if ( $c eq ',' ) {
+                $pos++;
+                next;
+            }
+            elsif ( $c eq ']' ) {
+                $pos++;
+                last;
+            }
+            else {
+                die "decode_json: expected ',' or ']' at position $pos";
+            }
+        }
+        return \@out;
+    };
+
+    $parse_object = sub {
+        $pos++;    # skip '{'
+        my %out;
+        $skip_ws->();
+        if ( substr( $text, $pos, 1 ) eq '}' ) {
+            $pos++;
+            return \%out;
+        }
+        while (1) {
+            $skip_ws->();
+            my $key = $parse_string->();
+            $skip_ws->();
+            die "decode_json: expected ':' at position $pos"
+              unless substr( $text, $pos, 1 ) eq ':';
+            $pos++;
+            $skip_ws->();
+            $out{$key} = $parse_value->();
+            $skip_ws->();
+            my $c = substr( $text, $pos, 1 );
+            if ( $c eq ',' ) {
+                $pos++;
+                next;
+            }
+            elsif ( $c eq '}' ) {
+                $pos++;
+                last;
+            }
+            else {
+                die "decode_json: expected ',' or '}' at position $pos";
+            }
+        }
+        return \%out;
+    };
+
+    $parse_value = sub {
+        $skip_ws->();
+        die "decode_json: unexpected end of input" if $pos >= $len;
+        my $c = substr( $text, $pos, 1 );
+        if ( $c eq '{' ) {
+            return $parse_object->();
+        }
+        elsif ( $c eq '[' ) {
+            return $parse_array->();
+        }
+        elsif ( $c eq '"' ) {
+            return $parse_string->();
+        }
+        elsif ( substr( $text, $pos, 4 ) eq 'true' ) {
+            $pos += 4;
+            return 1;
+        }
+        elsif ( substr( $text, $pos, 5 ) eq 'false' ) {
+            $pos += 5;
+            return 0;
+        }
+        elsif ( substr( $text, $pos, 4 ) eq 'null' ) {
+            $pos += 4;
+            return undef;
+        }
+        elsif ( $c eq '-' || $c =~ /[0-9]/ ) {
+            return $parse_number->();
+        }
+        else {
+            die "decode_json: unexpected character '$c' at position $pos";
+        }
+    };
+
+    my $result = $parse_value->();
+    $skip_ws->();
+    die "decode_json: trailing garbage after JSON value" if $pos < $len;
+    return $result;
 }
 
 1;

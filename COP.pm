@@ -106,7 +106,8 @@ sub Run ($$@) {
         return 0;
     }
 
-    my $round_to_pair0 = $dp->FirstUnpairedRound0();
+    my $last_paired_round0 = $dp->LastPairedRound0();
+    my $round_to_pair0     = $dp->FirstUnpairedRound0();
 
     my $timestamp     = get_timestamp();
     my $division_name = $dp->Name();
@@ -229,8 +230,9 @@ sub Run ($$@) {
         }
 
         my @division_pairings = ();
+        my $last_paired_round0 = $dp->LastPairedRound0();
 
-        for ( my $round = 0 ; $round <= $sr0 ; $round++ ) {
+        for ( my $round = 0 ; $round <= $last_paired_round0 ; $round++ ) {
             my @round_pairings = ();
             for ( my $i = 0 ; $i < $number_of_players ; $i++ ) {
                 my $player = $players[$i];
@@ -271,7 +273,7 @@ sub Run ($$@) {
             push( @division_results, { results => \@round_results } );
         }
         
-        my $rounds_remaining  = ($number_of_rounds - $sr0) - 1;
+        my $rounds_remaining  = ($number_of_rounds - $last_paired_round0) - 1;
 
         my $api_control_loss_threshold = $control_loss_thresholds->[-1];
         if ($rounds_remaining < scalar(@$control_loss_thresholds)) {
@@ -313,7 +315,7 @@ sub Run ($$@) {
 
         my $json_request = encode_json($request_hash);
 
-        my @partial_rounds = get_partial_rounds( $dp, $sr0 );
+        my @partial_rounds = get_partial_rounds( $dp, $last_paired_round0 );
         if (@partial_rounds) {
             printf( "Warning: pairings computed with partial results in round(s): %s\n",
                 join( ', ', @partial_rounds ) );
@@ -431,9 +433,9 @@ sub Run ($$@) {
             }
             my $opponent_id = $opponent->ID();
             my $number_of_times_played =
-              $player->CountRoundRepeats( $opponent, $sr0 );
+              $player->CountRoundRepeats( $opponent, $last_paired_round0 );
             my $number_of_times_played_excluding_last_round =
-              $player->CountRoundRepeats( $opponent, $sr0 - 1 );
+              $player->CountRoundRepeats( $opponent, $last_paired_round0 - 1 );
 
             my $played_last_round = $number_of_times_played -
               $number_of_times_played_excluding_last_round;
@@ -459,10 +461,10 @@ sub Run ($$@) {
         my $times_given_bye_key =
           create_times_played_key( $player_id, BYE_PLAYER_ID );
 
-        # Count the byes up to the based on round
+        # Count the byes by up to the based on round
         # (There does not seem to be an existing Player method for this)
         my $byes = 0;
-        for ( my $round = 0 ; $round <= $sr0 ; $round++ ) {
+        for ( my $round = 0 ; $round <= $round_to_pair1 - 1 ; $round++ ) {
             my $opponent = $player->{pairings}->[$round];
             if ( ( defined $opponent ) && $opponent == 0 ) {
                 $byes++;
@@ -517,7 +519,7 @@ sub Run ($$@) {
         disallow_repeat_byes => $disallow_repeat_byes,
     };
 
-    my @partial_rounds = get_partial_rounds( $dp, $sr0 );
+    my @partial_rounds = get_partial_rounds( $dp, $last_paired_round0 );
     if (@partial_rounds) {
         printf( "Warning: pairings computed with partial results in round(s): %s\n",
             join( ', ', @partial_rounds ) );
@@ -559,6 +561,13 @@ sub Run ($$@) {
 }
 
 =back
+
+=cut
+
+=head1 BUGS
+
+The number of byes each player has is based on the most recent
+round as opposed to the provided based on round.
 
 =cut
 
@@ -617,10 +626,10 @@ sub copy_log_to_html_directory {
 }
 
 sub get_partial_rounds {
-    my ( $dp, $max_round0 ) = @_;
+    my ( $dp, $last_paired_round0 ) = @_;
     my @players        = $dp->Players();
     my @partial_rounds = ();
-    for ( my $round = 0 ; $round <= $max_round0 ; $round++ ) {
+    for ( my $round = 0 ; $round <= $last_paired_round0 ; $round++ ) {
         my $has_result     = 0;
         my $missing_result = 0;
         for my $player (@players) {

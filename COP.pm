@@ -290,8 +290,18 @@ sub Run ($$@) {
             $api_gibson_spread = $gibson_spread->[$rounds_remaining - 1];
         }
 
+        # With neither pairings nor results to base the pairings on, the API
+        # cannot run COP, so let it choose an appropriate initial pairing
+        # method (init fontes or round robin) instead. Both have to be empty:
+        # the API rejects AUTO outright once any pairings exist, which a
+        # division can have before any results are in.
+        my $pair_method = 'PAIR_COP';
+        if ( ( scalar @division_pairings == 0 ) && ( scalar @division_results == 0 ) ) {
+            $pair_method = 'PAIR_AUTO';
+        }
+
         my $request_hash = {
-            pair_method                   => 'COP',
+            pair_method                   => $pair_method,
             player_names                  => \@player_names,
             player_classes                => \@player_classes,
             division_pairings             => \@division_pairings,
@@ -364,24 +374,76 @@ sub Run ($$@) {
         }
 
         my $setupp = $this->SetupForPairings(
-            'division' => $dp,
-            'source0'  => $sr0
+            'division'            => $dp,
+            'source0'             => $sr0,
+            'pairing_system_name' => 'COP'
         ) or return 0;
 
         my $target0 = $setupp->{'target0'};
 
-        my $api_pairings = $response_data->{pairings};
-        for ( my $i = 0 ; $i < scalar @{$api_pairings} ; $i++ ) {
-            my $player_api_id = $i;
-            my $player_id = $players[$i]->ID();
-            my $opponent_api_id = $api_pairings->[$i];
-            my $opponent_id = 0;
-            if ($opponent_api_id < 0) {
-                next;
-            } elsif ($opponent_api_id != $player_api_id) {
-                $opponent_id = $players[$opponent_api_id]->ID();
+        # The API always returns the pairings for the next round in
+        # 'pairings'. When it pairs more than one round at a time, as
+        # PAIR_AUTO does for initial fontes and round robins, it returns
+        # every round it paired, one round after another, in
+        # 'multiround_pairings'.
+        my @rounds_of_pairings = ( $response_data->{pairings} );
+
+        my $multiround_pairings = $response_data->{multiround_pairings};
+        if ( $multiround_pairings && scalar @{$multiround_pairings} ) {
+            if ( scalar( @{$multiround_pairings} ) % $number_of_players ) {
+                $tournament->TellUser(
+                    'eapfail',
+                    sprintf(
+                        "COP API returned %d multiround pairings, "
+                          . "which is not a multiple of the %d players "
+                          . "in division %s",
+                        scalar( @{$multiround_pairings} ),
+                        $number_of_players, $division_name
+                    )
+                );
+                return 0;
             }
-            $dp->Pair( $player_id, $opponent_id, $target0, 1 );
+
+            my $multiround_rounds =
+              scalar( @{$multiround_pairings} ) / $number_of_players;
+            my $rounds_available = $number_of_rounds - $target0;
+            if ( $multiround_rounds > $rounds_available ) {
+                printf(
+                    "Warning: COP API returned pairings for %d rounds "
+                      . "but only %d rounds remain; ignoring the rest\n",
+                    $multiround_rounds, $rounds_available
+                );
+                $multiround_rounds = $rounds_available;
+            }
+
+            @rounds_of_pairings = ();
+            for ( my $round = 0 ; $round < $multiround_rounds ; $round++ ) {
+                my $first = $round * $number_of_players;
+                push(
+                    @rounds_of_pairings,
+                    [
+                        @{$multiround_pairings}
+                          [ $first .. $first + $number_of_players - 1 ]
+                    ]
+                );
+            }
+        }
+
+        for ( my $round = 0 ; $round < scalar @rounds_of_pairings ; $round++ ) {
+            my $round_target0 = $target0 + $round;
+            my $api_pairings  = $rounds_of_pairings[$round];
+            for ( my $i = 0 ; $i < scalar @{$api_pairings} ; $i++ ) {
+                my $player_api_id = $i;
+                my $player_id = $players[$i]->ID();
+                my $opponent_api_id = $api_pairings->[$i];
+                my $opponent_id = 0;
+                if ($opponent_api_id < 0) {
+                    next;
+                } elsif ($opponent_api_id != $player_api_id) {
+                    $opponent_id = $players[$opponent_api_id]->ID();
+                }
+                $dp->Pair( $player_id, $opponent_id, $round_target0, 1 );
+            }
         }
 
         $this->TidyAfterPairing($dp);
@@ -394,7 +456,10 @@ sub Run ($$@) {
         # Automatically show the pairings
         my $show_pairings_command =
             new TSH::Command::ShowPairings( 'noconsole' => 1 );
-        $show_pairings_command->Run( $tournament, $round_to_pair1, $dp );
+        for ( my $round = 0 ; $round < scalar @rounds_of_pairings ; $round++ ) {
+            $show_pairings_command->Run( $tournament, $target0 + $round + 1,
+                $dp );
+        }
         return 1;
     }
 

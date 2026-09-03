@@ -109,6 +109,8 @@ The first round, counting from 1, for which control loss is considered at all. B
 COP pairs without the control loss constraint, on the grounds that there is still too much
 tournament left for the leader's control to mean much.
 
+This value should be set to the round during which 'hot pairings' begin, where pairings are decided based on the results of the previous round, as opposed to being based on the results of 2 rounds ago.
+
 Default: `12`. Set this relative to the length of your event rather than copying the number: a
 useful rule of thumb is about three quarters of the way through.
 

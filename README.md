@@ -14,6 +14,8 @@ config use_cop_api = 1
 config simulations = 100000
 config always_wins_simulations = 10000
 config gibson_spread = [250, 200]
+config disallow_repeat_byes = 1
+config top_down_byes = 0
 config control_loss_thresholds = [0.30]
 config hopefulness = [0.2]
 config control_loss_activation_round =12
@@ -70,6 +72,24 @@ rounds to determine how much spread a player needs to be gibsonized, because a s
 `[250, 200]`, the spread lead needed is 250 * 2 = 500 with one round to go and 200 * 2 * 2 = 800 with two.
 
 Default: `[250, 200]`.
+
+### `disallow_repeat_byes`
+
+Whether a player who has already received a bye earlier in the tournament can be given the bye
+again. When set to 1, COP treats pairing an already-byed player against the bye as a prohibitively
+weighted pairing, so a player who hasn't yet had a bye is chosen instead whenever one is available.
+
+Default: `0`, meaning repeat byes are allowed. Set it to 1 for formats where each player should
+receive at most one bye.
+
+### `top_down_byes`
+
+Which end of the standings the bye is drawn from in a division with an odd number of players.
+By default, the bye goes to the lowest-ranked eligible player. When set to 1, COP instead assigns the
+bye from the top of the standings downward.
+
+Default: `0`. This value is only read by the API implementation; it has no effect when
+`use_cop_api` is 0.
 
 ### `control_loss_thresholds`
 
